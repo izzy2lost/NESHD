@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Library surface colors (dark/night mode) -->
+    <color name="library_background_start">#090909</color>
+    <color name="library_background_center">#141111</color>
+    <color name="library_background_end">#241010</color>
+    <color name="library_surface">#111111</color>
+    <color name="library_surface_high">#202020</color>
+    <color name="library_surface_higher">#2b2b2b</color>
+    <color name="library_text">#f4f1ee</color>
+    <color name="library_text_muted">#b9b1ad</color>
+    <color name="library_outline">#4d3b3b</color>
+    <color name="library_accent">#dd2020</color>
+    <color name="library_accent_dark">#8f1518</color>
+</resources>

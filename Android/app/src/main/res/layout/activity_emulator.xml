@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- OpenGL ES 3.0 surface for NES output -->
+    <com.izzy2lost.neshd.EmulatorGLSurfaceView
+        android:id="@+id/glSurface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- On-screen touch controller overlay -->
+    <com.izzy2lost.neshd.TouchControllerView
+        android:id="@+id/touchController"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <ImageButton
+        android:id="@+id/gameMenuButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="top|start"
+        android:layout_margin="8dp"
+        android:background="@drawable/emulator_overlay_button_bg"
+        android:contentDescription="Open game menu"
+        android:padding="12dp"
+        android:src="@drawable/menu_24px"
+        android:tint="@android:color/white" />
+
+    <ImageButton
+        android:id="@+id/touchVisibilityButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="top|end"
+        android:layout_margin="8dp"
+        android:background="@drawable/emulator_overlay_button_bg"
+        android:contentDescription="Hide touch controls"
+        android:padding="12dp"
+        android:src="@drawable/visibility_off_24px"
+        android:tint="@android:color/white" />
+
+</FrameLayout>

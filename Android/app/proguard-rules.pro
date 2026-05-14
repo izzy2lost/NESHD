@@ -1,0 +1,4 @@
+-keep class com.izzy2lost.neshd.NativeLib { *; }
+-keepclassmembers class com.izzy2lost.neshd.NativeLib { *; }
+-keep class com.izzy2lost.neshd.EmulatorActivity { *; }
+-dontwarn kotlin.**

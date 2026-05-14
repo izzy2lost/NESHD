@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.drawerlayout.widget.DrawerLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/drawerLayout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <androidx.coordinatorlayout.widget.CoordinatorLayout
+        android:id="@+id/mainContent"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/library_background">
+
+        <com.google.android.material.appbar.AppBarLayout
+            android:id="@+id/appBarLayout"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@android:color/transparent"
+            app:liftOnScroll="false">
+
+            <com.google.android.material.appbar.MaterialToolbar
+                android:id="@+id/toolbar"
+                android:layout_width="match_parent"
+                android:layout_height="?attr/actionBarSize"
+                android:background="@android:color/transparent"
+                app:contentInsetEnd="0dp"
+                app:contentInsetStart="0dp"
+                app:title="">
+
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent">
+
+                    <ImageView
+                        android:layout_width="96dp"
+                        android:layout_height="match_parent"
+                        android:layout_gravity="center"
+                        android:adjustViewBounds="true"
+                        android:contentDescription="@string/app_name"
+                        android:scaleType="centerInside"
+                        android:src="@drawable/logo" />
+
+                    <ImageButton
+                        android:id="@+id/btnThemeToggle"
+                        android:layout_width="?attr/actionBarSize"
+                        android:layout_height="?attr/actionBarSize"
+                        android:layout_gravity="start|center_vertical"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="Toggle theme"
+                        android:padding="12dp"
+                        android:src="@drawable/dark_mode_24px" />
+
+                    <ImageButton
+                        android:id="@+id/btnSettings"
+                        android:layout_width="?attr/actionBarSize"
+                        android:layout_height="?attr/actionBarSize"
+                        android:layout_gravity="end|center_vertical"
+                        android:background="?attr/selectableItemBackgroundBorderless"
+                        android:contentDescription="@string/action_settings"
+                        android:padding="12dp"
+                        android:src="@drawable/ic_settings" />
+
+                </FrameLayout>
+
+            </com.google.android.material.appbar.MaterialToolbar>
+
+            <LinearLayout
+                android:id="@+id/libraryControls"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@android:color/transparent"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="20dp"
+                android:paddingTop="8dp"
+                android:paddingEnd="20dp"
+                android:paddingBottom="12dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/libraryHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:drawableStart="@drawable/lightbulb_2_24px"
+                        android:drawableTint="#FDD835"
+                        android:drawablePadding="6dp"
+                        android:gravity="center_vertical"
+                        android:text="Long press a game for per-game settings"
+                        android:textAppearance="@style/TextAppearance.Material3.BodySmall"
+                        android:textColor="@color/library_text_muted" />
+
+                </LinearLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnViewList"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="12dp"
+                    android:contentDescription="List view"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:padding="0dp"
+                    android:textColor="@color/library_view_toggle_content"
+                    app:backgroundTint="@color/library_view_toggle_background"
+                    app:icon="@drawable/ic_view_list"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    app:iconTint="@color/library_view_toggle_content"
+                    app:strokeColor="@color/library_outline" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnViewGrid"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="6dp"
+                    android:contentDescription="Grid view"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:padding="0dp"
+                    android:textColor="@color/library_view_toggle_content"
+                    app:backgroundTint="@color/library_view_toggle_background"
+                    app:icon="@drawable/ic_view_grid"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    app:iconTint="@color/library_view_toggle_content"
+                    app:strokeColor="@color/library_outline" />
+
+            </LinearLayout>
+
+            <!-- Search bar (hidden until search is active) -->
+            <LinearLayout
+                android:id="@+id/searchBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingStart="16dp"
+                android:paddingEnd="12dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="12dp"
+                android:visibility="gone">
+
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_marginEnd="10dp"
+                    app:srcCompat="@drawable/search_24px"
+                    app:tint="@color/library_text_muted" />
+
+                <EditText
+                    android:id="@+id/searchInput"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:background="@null"
+                    android:hint="Search games…"
+                    android:inputType="text"
+                    android:imeOptions="actionSearch"
+                    android:maxLines="1"
+                    android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
+                    android:textColor="@color/library_text"
+                    android:textColorHint="@color/library_text_muted" />
+
+                <ImageButton
+                    android:id="@+id/btnClearSearch"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_marginStart="4dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="Clear search"
+                    android:padding="6dp"
+                    android:src="@drawable/ic_close"
+                    android:tint="@color/library_text_muted" />
+
+            </LinearLayout>
+
+        </com.google.android.material.appbar.AppBarLayout>
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/romRecyclerView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingStart="14dp"
+            android:paddingTop="10dp"
+            android:paddingEnd="14dp"
+            android:paddingBottom="96dp"
+            app:layout_behavior="@string/appbar_scrolling_view_behavior" />
+
+        <TextView
+            android:id="@+id/libraryEmptyText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_margin="32dp"
+            android:background="@drawable/library_section_background"
+            android:gravity="center"
+            android:padding="20dp"
+            android:text="No ROMs found"
+            android:textAppearance="@style/TextAppearance.Material3.BodyLarge"
+            android:textColor="@color/library_text_muted"
+            android:visibility="gone" />
+
+        <androidx.compose.ui.platform.ComposeView
+            android:id="@+id/fabMenu"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:layout_margin="16dp" />
+
+    </androidx.coordinatorlayout.widget.CoordinatorLayout>
+
+    <LinearLayout
+        android:id="@+id/settingsDrawerContainer"
+        android:layout_width="300dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="end"
+        android:background="?attr/colorSurface"
+        android:orientation="vertical">
+
+        <include
+            android:id="@+id/drawerSettings"
+            layout="@layout/drawer_settings" />
+
+    </LinearLayout>
+
+</androidx.drawerlayout.widget.DrawerLayout>

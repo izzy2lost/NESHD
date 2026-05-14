@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NES HD</string>
+    <string name="open_rom">Open ROM</string>
+    <string name="scan_folder">Scan ROM Folder</string>
+    <string name="import_hd_pack">Import HD Pack ZIP</string>
+    <string name="action_settings">Settings</string>
+    <string name="no_roms">No ROMs found. Tap + to open a ROM file.</string>
+</resources>

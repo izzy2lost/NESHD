@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:clickable="true"
+    android:clipChildren="false"
+    android:clipToPadding="false"
+    android:focusable="true"
+    android:padding="6dp">
+
+    <FrameLayout
+        android:id="@+id/romCoverCard"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:clipChildren="false"
+        android:clipToPadding="false"
+        app:layout_constraintDimensionRatio="452:701"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <ImageView
+            android:id="@+id/romCoverImage"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="Game cover"
+            android:scaleType="fitCenter"
+            android:src="@drawable/no_cover_placeholder" />
+
+    </FrameLayout>
+
+    <ImageView
+        android:id="@+id/romGridHdPackIcon"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="8dp"
+        android:contentDescription="HD pack installed"
+        android:src="@drawable/hd_24px"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="@id/romCoverCard"
+        app:layout_constraintTop_toTopOf="@id/romCoverCard" />
+
+    <TextView
+        android:id="@+id/romGridName"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:ellipsize="end"
+        android:gravity="center_horizontal"
+        android:maxLines="2"
+        android:textAlignment="center"
+        android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
+        android:textColor="@color/library_text"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/romCoverCard" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>
