@@ -33,6 +33,7 @@ class TouchControllerView @JvmOverloads constructor(
     private val actionPlateRect = RectF()
     private val btnARect = RectF()
     private val btnBRect = RectF()
+    private val btnABRect = RectF()
     private val btnTurboARect = RectF()
     private val btnTurboBRect = RectF()
     private val btnStartRect = RectF()
@@ -90,10 +91,12 @@ class TouchControllerView @JvmOverloads constructor(
     }
 
     private val pressed = mutableSetOf<Int>()
+    private val pointerButtons = mutableMapOf<Int, Set<Int>>()
 
     fun releaseAllButtons() {
         for (btn in pressed) NativeLib.setButtonState(btn, false)
         pressed.clear()
+        pointerButtons.clear()
         invalidate()
     }
 
@@ -127,7 +130,7 @@ class TouchControllerView @JvmOverloads constructor(
         val turboRadius = actionRadius * 0.52f
         val turboGap = actionRadius * 0.78f
         val btnACx = width - rightInset - actionRadius
-        val btnBCx = btnACx - actionRadius * 2.40f
+        val btnBCx = btnACx - actionRadius * 3.10f
         val turboACx = btnACx + actionRadius * 0.24f
         val rightClusterBottomPad = bottomPad + actionRadius * 0.55f
         val turboBCy = height - rightClusterBottomPad - turboRadius - portraitControlLift
@@ -136,6 +139,14 @@ class TouchControllerView @JvmOverloads constructor(
         val btnACy = btnBCy - actionRadius * 0.50f
         btnBRect.setCircle(btnBCx, btnBCy, actionRadius)
         btnARect.setCircle(btnACx, btnACy, actionRadius)
+
+        // Touch screens cannot always report two nearby fingers reliably. Provide
+        // a dedicated bridge between the face buttons that presses A and B as one
+        // chord, without changing the normal hit areas for either button.
+        val chordCx = (btnACx + btnBCx) * 0.5f
+        val chordCy = (btnACy + btnBCy) * 0.5f
+        val chordRadius = actionRadius * 0.52f
+        btnABRect.setCircle(chordCx, chordCy, chordRadius)
 
         actionPlateRect.set(
             btnBRect.left - actionRadius * 0.44f,
@@ -301,9 +312,22 @@ class TouchControllerView @JvmOverloads constructor(
         drawGlossyCircle(canvas, btnBRect.centerX(), btnBRect.centerY(), btnBRect.width() * 0.5f, Color.rgb(219, 29, 42), Color.rgb(171, 19, 29), NativeLib.BTN_B in pressed)
         drawGlossyCircle(canvas, btnARect.centerX(), btnARect.centerY(), btnARect.width() * 0.5f, Color.rgb(219, 29, 42), Color.rgb(171, 19, 29), NativeLib.BTN_A in pressed)
 
+        val chordPressed = NativeLib.BTN_A in pressed && NativeLib.BTN_B in pressed
+        drawGlossyCircle(
+            canvas,
+            btnABRect.centerX(),
+            btnABRect.centerY(),
+            btnABRect.width() * 0.5f,
+            Color.rgb(126, 128, 128),
+            Color.rgb(74, 75, 75),
+            chordPressed
+        )
+
         buttonLabelPaint.textSize = btnBRect.width() * 0.40f
         drawCenteredButtonLabel(canvas, btnBRect, "B", NativeLib.BTN_B)
         drawCenteredButtonLabel(canvas, btnARect, "A", NativeLib.BTN_A)
+        buttonLabelPaint.textSize = btnABRect.width() * 0.24f
+        drawCenteredButtonLabel(canvas, btnABRect, "A+B", if (chordPressed) NativeLib.BTN_A else -1)
     }
 
     private fun drawSystemButtons(canvas: Canvas) {
@@ -432,23 +456,23 @@ class TouchControllerView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        val newPressed = mutableSetOf<Int>()
-        val action = event.actionMasked
-        val releasedPointerIndex = when (action) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_CANCEL -> pointerButtons.clear()
+
             MotionEvent.ACTION_UP,
-            MotionEvent.ACTION_POINTER_UP,
-            MotionEvent.ACTION_CANCEL -> event.actionIndex
-            else -> -1
-        }
-
-        if (action != MotionEvent.ACTION_CANCEL) {
-            for (i in 0 until event.pointerCount) {
-                if (i != releasedPointerIndex) {
-                    collectHits(event.getX(i), event.getY(i), newPressed)
-                }
+            MotionEvent.ACTION_POINTER_UP -> {
+                updatePointers(event, event.actionIndex)
+                pointerButtons.remove(event.getPointerId(event.actionIndex))
             }
+
+            else -> updatePointers(event)
         }
 
+        // A button remains down while any pointer is on it. Keeping ownership per
+        // pointer is important for chords such as A+B and also prevents lifting one
+        // finger from releasing a button that another finger is still holding.
+        val newPressed = mutableSetOf<Int>()
+        for (buttons in pointerButtons.values) newPressed.addAll(buttons)
         val toRelease = pressed - newPressed
         val toPress = newPressed - pressed
 
@@ -460,6 +484,25 @@ class TouchControllerView @JvmOverloads constructor(
 
         invalidate()
         return true
+    }
+
+    private fun updatePointers(event: MotionEvent, excludedIndex: Int = -1) {
+        val activePointerIds = mutableSetOf<Int>()
+        for (i in 0 until event.pointerCount) {
+            if (i == excludedIndex) continue
+
+            val pointerId = event.getPointerId(i)
+            activePointerIds.add(pointerId)
+            pointerButtons[pointerId] = buildSet {
+                collectHits(event.getX(i), event.getY(i), this)
+            }
+        }
+
+        // MOVE events describe every currently active pointer. Drop any stale
+        // ownership defensively in case Android cancelled a pointer sequence.
+        if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+            pointerButtons.keys.retainAll(activePointerIds)
+        }
     }
 
     private fun collectHits(x: Float, y: Float, out: MutableSet<Int>) {
@@ -474,8 +517,13 @@ class TouchControllerView @JvmOverloads constructor(
             if (angle >= -65f && angle <= 65f) out.add(NativeLib.BTN_RIGHT)
         }
 
-        if (btnARect.contains(x, y)) out.add(NativeLib.BTN_A)
-        if (btnBRect.contains(x, y)) out.add(NativeLib.BTN_B)
+        if (btnABRect.contains(x, y)) {
+            out.add(NativeLib.BTN_A)
+            out.add(NativeLib.BTN_B)
+        } else {
+            if (btnARect.contains(x, y)) out.add(NativeLib.BTN_A)
+            if (btnBRect.contains(x, y)) out.add(NativeLib.BTN_B)
+        }
         if (btnTurboARect.contains(x, y)) out.add(NativeLib.BTN_TURBO_A)
         if (btnTurboBRect.contains(x, y)) out.add(NativeLib.BTN_TURBO_B)
         if (btnStartRect.contains(x, y)) out.add(NativeLib.BTN_START)

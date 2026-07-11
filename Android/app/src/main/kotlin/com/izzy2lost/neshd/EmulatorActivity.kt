@@ -39,6 +39,8 @@ class EmulatorActivity : AppCompatActivity() {
     private var touchControlsVisible = true
     private var dialogPauseDepth = 0
     private var isFdsRom = false
+    private val pressedControllerKeys = mutableSetOf<Int>()
+    private val pressedControllerButtons = mutableSetOf<Int>()
 
     companion object {
         const val EXTRA_ROM_PATH = "ROM_PATH"
@@ -147,6 +149,8 @@ class EmulatorActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        releaseControllerButtons()
+        binding.touchController.releaseAllButtons()
         NativeLib.pause()
         NativeLib.flushBatterySave()
         binding.glSurface.onPause()
@@ -165,19 +169,35 @@ class EmulatorActivity : AppCompatActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        keyMap[keyCode]?.let { btn ->
-            NativeLib.setButtonState(btn, true)
+        keyMap[keyCode]?.let {
+            pressedControllerKeys.add(keyCode)
+            updateControllerButtons()
             return true
         }
         return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
-        keyMap[keyCode]?.let { btn ->
-            NativeLib.setButtonState(btn, false)
+        keyMap[keyCode]?.let {
+            pressedControllerKeys.remove(keyCode)
+            updateControllerButtons()
             return true
         }
         return super.onKeyUp(keyCode, event)
+    }
+
+    private fun updateControllerButtons() {
+        val newButtons = pressedControllerKeys.mapNotNullTo(mutableSetOf()) { keyMap[it] }
+        for (btn in pressedControllerButtons - newButtons) NativeLib.setButtonState(btn, false)
+        for (btn in newButtons - pressedControllerButtons) NativeLib.setButtonState(btn, true)
+        pressedControllerButtons.clear()
+        pressedControllerButtons.addAll(newButtons)
+    }
+
+    private fun releaseControllerButtons() {
+        for (btn in pressedControllerButtons) NativeLib.setButtonState(btn, false)
+        pressedControllerButtons.clear()
+        pressedControllerKeys.clear()
     }
 
     private fun setupOverlayButtons() {
