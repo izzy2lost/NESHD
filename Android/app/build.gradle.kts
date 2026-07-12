@@ -123,4 +123,5 @@ dependencies {
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.recyclerview)
+    testImplementation("junit:junit:4.13.2")
 }

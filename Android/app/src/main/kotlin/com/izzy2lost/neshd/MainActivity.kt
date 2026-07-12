@@ -47,7 +47,6 @@ import java.io.File
 import java.io.IOException
 import java.net.URL
 import java.security.MessageDigest
-import java.text.Normalizer
 import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -73,6 +72,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     data class RomEntry(val name: String, val path: String)
+
+    private data class CoverMatch(val path: String, val region: NesRomDatabase.Region)
 
     data class HdPackZipInfo(
         val displayName: String,
@@ -750,9 +751,10 @@ class MainActivity : AppCompatActivity() {
         val region = synchronized(coverIdentityLock) {
             coverRegionByRomPath[rom.path] ?: NesRomDatabase.Region.NA
         }
-        val coverPath = lookupCoverPath(lookupTitle, region) ?: return
-        val baseUrl = baseUrlFor(region)
-        val cacheFile = coverCacheFile(coverPath, region)
+        val coverMatch = lookupCoverPath(lookupTitle, region) ?: return
+        val coverPath = coverMatch.path
+        val baseUrl = baseUrlFor(coverMatch.region)
+        val cacheFile = coverCacheFile(coverPath, coverMatch.region)
         val memoryKey = cacheFile.nameWithoutExtension
         synchronized(coverMemoryCache) {
             coverMemoryCache[memoryKey]
@@ -913,7 +915,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun lookupCoverPath(rawName: String, region: NesRomDatabase.Region): String? {
+    private fun lookupCoverPath(rawName: String, region: NesRomDatabase.Region): CoverMatch? {
         ensureCoverIndexLoaded()
         if (!coverIndexLoaded) return null
 
@@ -923,13 +925,30 @@ class MainActivity : AppCompatActivity() {
             if (missKey.endsWith(":")) return null
             if (missKey in coverMisses) return null
             val indexes = when (region) {
-                NesRomDatabase.Region.FDS -> listOf(coverIndexFds, coverIndexJp, coverIndex)
-                NesRomDatabase.Region.JP -> listOf(coverIndexJp, coverIndex, coverIndexFds)
-                NesRomDatabase.Region.NA -> listOf(coverIndex, coverIndexJp, coverIndexFds)
+                NesRomDatabase.Region.FDS -> listOf(
+                    NesRomDatabase.Region.FDS to coverIndexFds,
+                    NesRomDatabase.Region.JP to coverIndexJp,
+                    NesRomDatabase.Region.NA to coverIndex
+                )
+                NesRomDatabase.Region.JP -> listOf(
+                    NesRomDatabase.Region.JP to coverIndexJp,
+                    NesRomDatabase.Region.NA to coverIndex,
+                    NesRomDatabase.Region.FDS to coverIndexFds
+                )
+                NesRomDatabase.Region.NA -> listOf(
+                    NesRomDatabase.Region.NA to coverIndex,
+                    NesRomDatabase.Region.JP to coverIndexJp,
+                    NesRomDatabase.Region.FDS to coverIndexFds
+                )
             }
-            for (index in indexes) {
+            for ((matchedRegion, index) in indexes) {
                 for (candidate in candidates) {
-                    index[candidate]?.let { return it }
+                    index[candidate]?.let { return CoverMatch(it, matchedRegion) }
+                }
+            }
+            for ((matchedRegion, index) in indexes) {
+                CoverNameMatcher.findContainedTitleMatch(candidates, index)?.let {
+                    return CoverMatch(it, matchedRegion)
                 }
             }
             coverMisses.add(missKey)
@@ -1002,66 +1021,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun coverIndexCandidates(rawName: String): LinkedHashSet<String> {
-        val base = romNameWithoutExtension(rawName)
-        val stripped = stripRomDecorations(base)
-        val candidates = linkedSetOf(
-            base,
-            stripped,
-            moveTrailingArticle(base),
-            moveTrailingArticle(stripped)
-        )
-        return normalizedCoverCandidates(candidates)
+        return CoverNameMatcher.indexCandidates(rawName)
     }
 
     private fun coverLookupCandidates(rawName: String): LinkedHashSet<String> {
-        val base = romNameWithoutExtension(rawName)
-        val stripped = stripRomDecorations(base)
-        val candidates = linkedSetOf(
-            base,
-            stripped,
-            moveTrailingArticle(base),
-            moveTrailingArticle(stripped),
-            stripped.substringBefore(" - ").trim(),
-            stripped.substringBefore(":").trim()
-        )
-        return normalizedCoverCandidates(candidates)
-    }
-
-    private fun normalizedCoverCandidates(candidates: Iterable<String>): LinkedHashSet<String> {
-        return candidates
-            .asSequence()
-            .map { normalizeCoverKey(it) }
-            .filter { it.isNotBlank() }
-            .toCollection(LinkedHashSet())
-    }
-
-    private fun stripRomDecorations(name: String): String {
-        return name
-            .replace('_', ' ')
-            .replace(Regex("\\[[^\\]]*\\]"), " ")
-            .replace(Regex("\\([^\\)]*\\)"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-    }
-
-    private fun moveTrailingArticle(name: String): String {
-        val match = Regex("""^(.+),\s*(the|a|an)$""", RegexOption.IGNORE_CASE).matchEntire(name.trim())
-            ?: return name
-        return "${match.groupValues[2]} ${match.groupValues[1]}"
-    }
-
-    private fun normalizeCoverKey(input: String): String {
-        val ascii = Normalizer.normalize(input, Normalizer.Form.NFD)
-            .replace(Regex("\\p{Mn}+"), "")
-        return ascii
-            .lowercase(Locale.US)
-            .replace("&", " and ")
-            .replace("+", " ")
-            .replace("'", "")
-            .replace(Regex("\\b(usa|world|rev|revision|prototype|proto|beta)\\b"), " ")
-            .replace(Regex("[^a-z0-9]+"), " ")
-            .trim()
-            .replace(Regex("\\s+"), "")
+        return CoverNameMatcher.lookupCandidates(rawName)
     }
 
     private fun sha1(text: String): String {
