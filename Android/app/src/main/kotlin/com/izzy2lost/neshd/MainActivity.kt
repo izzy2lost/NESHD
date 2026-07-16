@@ -69,6 +69,10 @@ class MainActivity : AppCompatActivity() {
         const val VIEW_TYPE_GRID = 1
         const val PER_GAME_VIDEO_FILTER_PREFIX = "per_game_video_filter_"
         const val PER_GAME_ASPECT_RATIO_PREFIX = "per_game_aspect_ratio_"
+        const val PRIVACY_POLICY_URL = "https://www.izzy2lost.com/neshd-privacy"
+        const val LICENSE_URL = "https://github.com/izzy2lost/NESHD/blob/main/LICENSE"
+        const val NES_HD_REPOSITORY_URL = "https://github.com/izzy2lost/NESHD"
+        const val MESEN_REPOSITORY_URL = "https://github.com/SourMesen/Mesen2"
     }
 
     data class RomEntry(val name: String, val path: String)
@@ -1053,6 +1057,23 @@ class MainActivity : AppCompatActivity() {
             pickBiosLauncher.launch(arrayOf("application/octet-stream", "*/*"))
         }
 
+        binding.drawerSettings.versionValue.text = getString(
+            R.string.about_version,
+            packageManager.getPackageInfo(packageName, 0).versionName
+        )
+        binding.drawerSettings.privacyPolicyRow.setOnClickListener {
+            openExternalLink(PRIVACY_POLICY_URL)
+        }
+        binding.drawerSettings.licenseRow.setOnClickListener {
+            openExternalLink(LICENSE_URL)
+        }
+        binding.drawerSettings.nesHdSourceRow.setOnClickListener {
+            openExternalLink(NES_HD_REPOSITORY_URL)
+        }
+        binding.drawerSettings.mesenSourceRow.setOnClickListener {
+            openExternalLink(MESEN_REPOSITORY_URL)
+        }
+
         binding.drawerLayout.addDrawerListener(object : DrawerLayout.DrawerListener {
             override fun onDrawerSlide(drawerView: View, slideOffset: Float) {}
             override fun onDrawerOpened(drawerView: View) {
@@ -1064,6 +1085,16 @@ class MainActivity : AppCompatActivity() {
             }
             override fun onDrawerStateChanged(newState: Int) {}
         })
+    }
+
+    private fun openExternalLink(url: String) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+        }
+        runCatching { startActivity(intent) }
+            .onFailure {
+                Toast.makeText(this, R.string.unable_to_open_link, Toast.LENGTH_SHORT).show()
+            }
     }
 
     private fun openSettingsDrawer() {
