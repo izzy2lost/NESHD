@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "com.izzy2lost.neshd"
     compileSdk = 36
-    ndkVersion = "30.0.14904198"
+    ndkVersion = "30.0.15729638"
 
     defaultConfig {
         applicationId = "com.izzy2lost.neshd"

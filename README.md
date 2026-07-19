@@ -36,7 +36,7 @@ The debug APK is created at:
 Android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The project requires JDK 17, Android SDK 36, NDK 30.0.14904198, and CMake 3.22.1. Android Studio can install the required SDK components automatically.
+The project requires JDK 17, Android SDK 36, NDK 30.0.15729638, and CMake 3.22.1. Android Studio can install the required SDK components automatically.
 
 To install the debug build on a connected device:
 
