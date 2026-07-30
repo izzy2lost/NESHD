@@ -19,6 +19,7 @@ Android/gradle/wrapper/gradle-wrapper.jar
 Android/.idea/
 Android/*.iml
 Android/**/*.iml
+.idea/
 
 # Keystore files
 Android/*.jks
