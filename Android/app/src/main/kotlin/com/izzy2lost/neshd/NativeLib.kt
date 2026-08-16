@@ -55,8 +55,10 @@ object NativeLib {
     const val PREF_VIDEO_FILTER_TYPE = "video_filter_type"
     const val PREF_ASPECT_RATIO = "aspect_ratio"
     const val PREF_HD_PACKS = "hd_packs"
+    const val PREF_ANTI_FLICKER = "anti_flicker"
     private const val PREF_LEGACY_VIDEO_FILTER_INDEX = "video_filter"
     const val DEFAULT_VIDEO_FILTER = FILTER_NONE
+    const val DEFAULT_ANTI_FLICKER = true
     const val ASPECT_NATIVE = 0
     const val ASPECT_STANDARD = 4
     const val ASPECT_WIDESCREEN = 5
@@ -151,10 +153,25 @@ object NativeLib {
             .apply()
     }
 
-    fun applyVideoSettings(filterType: Int, hdPacksEnabled: Boolean, aspectRatio: Int) {
+    fun getSavedAntiFlicker(prefs: SharedPreferences): Boolean =
+        prefs.getBoolean(PREF_ANTI_FLICKER, DEFAULT_ANTI_FLICKER)
+
+    fun saveAntiFlicker(prefs: SharedPreferences, enabled: Boolean) {
+        prefs.edit()
+            .putBoolean(PREF_ANTI_FLICKER, enabled)
+            .apply()
+    }
+
+    fun applyVideoSettings(
+        filterType: Int,
+        hdPacksEnabled: Boolean,
+        aspectRatio: Int,
+        antiFlickerEnabled: Boolean
+    ) {
         setVideoFilter(coerceVideoFilter(filterType))
         setHdPacksEnabled(hdPacksEnabled)
         setAspectRatio(coerceAspectRatio(aspectRatio))
+        setAntiFlicker(antiFlickerEnabled)
     }
 
     private fun coerceVideoFilter(filterType: Int): Int {
@@ -201,6 +218,8 @@ object NativeLib {
     external fun setVideoFilter(filterType: Int)
     external fun setHdPacksEnabled(enabled: Boolean)
     external fun setAspectRatio(aspectRatio: Int)
+    /** Maps to NesConfig.RemoveSpriteLimit + AdaptiveSpriteLimit. */
+    external fun setAntiFlicker(enabled: Boolean)
 
     // OpenGL (called on the GL thread)
     external fun glInit()

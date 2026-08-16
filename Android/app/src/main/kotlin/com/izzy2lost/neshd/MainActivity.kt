@@ -1122,6 +1122,13 @@ class MainActivity : AppCompatActivity() {
             NativeLib.setHdPacksEnabled(checked)
         }
 
+        binding.drawerSettings.switchAntiFlicker.setOnCheckedChangeListener(null)
+        binding.drawerSettings.switchAntiFlicker.isChecked = NativeLib.getSavedAntiFlicker(prefs)
+        binding.drawerSettings.switchAntiFlicker.setOnCheckedChangeListener { _, checked ->
+            NativeLib.saveAntiFlicker(prefs, checked)
+            NativeLib.setAntiFlicker(checked)
+        }
+
         val biosInstalled = fdsBiosFile().exists()
         binding.drawerSettings.fdsBiosStatus.text = if (biosInstalled) "Installed" else "Not installed"
     }
@@ -1504,7 +1511,8 @@ class MainActivity : AppCompatActivity() {
         NativeLib.applyVideoSettings(
             NativeLib.getSavedVideoFilter(prefs),
             prefs.getBoolean(NativeLib.PREF_HD_PACKS, true),
-            NativeLib.getSavedAspectRatio(prefs)
+            NativeLib.getSavedAspectRatio(prefs),
+            NativeLib.getSavedAntiFlicker(prefs)
         )
     }
 

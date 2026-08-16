@@ -594,7 +594,8 @@ class EmulatorActivity : AppCompatActivity() {
         NativeLib.applyVideoSettings(
             videoFilterOverride ?: NativeLib.getSavedVideoFilter(prefs),
             prefs.getBoolean(NativeLib.PREF_HD_PACKS, true),
-            aspectRatioOverride ?: NativeLib.getSavedAspectRatio(prefs)
+            aspectRatioOverride ?: NativeLib.getSavedAspectRatio(prefs),
+            NativeLib.getSavedAntiFlicker(prefs)
         )
     }
 

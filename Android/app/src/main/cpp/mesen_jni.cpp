@@ -332,6 +332,11 @@ Java_com_izzy2lost_neshd_NativeLib_initialize(JNIEnv* env, jobject /*thiz*/,
 
     // HD packs enabled by default
     nes.EnableHdPacks = true;
+
+    // Anti-flicker: lift the 8-sprite-per-scanline limit, but let the PPU put it
+    // back on the scanlines where removing it would break the game's own effects.
+    nes.RemoveSpriteLimit = true;
+    nes.AdaptiveSpriteLimit = true;
     nes.RamPowerOnState = RamState::AllZeros;
     nes.IsFullColorPalette = false;
     std::fill(std::begin(nes.UserPalette), std::end(nes.UserPalette), 0);
@@ -592,6 +597,19 @@ Java_com_izzy2lost_neshd_NativeLib_setHdPacksEnabled(JNIEnv* /*env*/, jobject /*
     if (!g_emu) return;
     NesConfig& nes = g_emu->GetSettings()->GetNesConfig();
     nes.EnableHdPacks = (enabled == JNI_TRUE);
+}
+
+// Anti-flicker – removes the 8-sprite-per-scanline limit (adaptive, so the limit
+// is restored on scanlines where dropping it would cause graphical glitches)
+JNIEXPORT void JNICALL
+Java_com_izzy2lost_neshd_NativeLib_setAntiFlicker(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                  jboolean enabled)
+{
+    if (!g_emu) return;
+    NesConfig& nes = g_emu->GetSettings()->GetNesConfig();
+    nes.RemoveSpriteLimit = (enabled == JNI_TRUE);
+    nes.AdaptiveSpriteLimit = (enabled == JNI_TRUE);
+    LOGI("Anti-flicker set: %s", enabled == JNI_TRUE ? "on" : "off");
 }
 
 JNIEXPORT void JNICALL
