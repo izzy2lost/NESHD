@@ -218,3 +218,4 @@ packages/*
 
 TestHelper/*
 UI/Dependencies.zip
+Android/key.properties
