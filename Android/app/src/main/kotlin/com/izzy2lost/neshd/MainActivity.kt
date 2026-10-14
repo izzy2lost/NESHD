@@ -968,52 +968,115 @@ class MainActivity : AppCompatActivity() {
         }
 
         thread(name = "CoverManifestLoad") {
-            val parsedNa = loadManifestInto(coverRepoBaseUrl)
-            val parsedJp = loadManifestInto(coverRepoBaseUrlJp)
-            val parsedFds = loadManifestInto(coverRepoBaseUrlFds)
-
-            synchronized(coverIndexLock) {
-                coverIndex.clear()
-                coverIndex.putAll(parsedNa)
-                coverIndexJp.clear()
-                coverIndexJp.putAll(parsedJp)
-                coverIndexFds.clear()
-                coverIndexFds.putAll(parsedFds)
-                coverMisses.clear()
-                coverIndexLoaded = true
-                coverIndexLoading = false
-            }
+            // Index from local manifests first so covers work offline, then refresh from GitHub.
+            applyLocalCoverManifests()
             runOnUiThread {
                 notifyLibraryChanged()
+            }
+
+            val updated = coverManifestSources.map { (name, baseUrl) ->
+                refreshRemoteManifest(name, baseUrl)
+            }.any { it }
+            if (updated) {
+                applyLocalCoverManifests()
+                runOnUiThread {
+                    notifyLibraryChanged()
+                }
             }
         }
     }
 
-    private fun loadManifestInto(baseUrl: String): Map<String, String> {
-        val parsed = HashMap<String, String>()
-        try {
+    private val coverManifestSources
+        get() = listOf(
+            "nes_covers" to coverRepoBaseUrl,
+            "nes_covers_jp" to coverRepoBaseUrlJp,
+            "fds_covers_jp" to coverRepoBaseUrlFds
+        )
+
+    private fun applyLocalCoverManifests() {
+        val parsedNa = readLocalManifest("nes_covers")
+        val parsedJp = readLocalManifest("nes_covers_jp")
+        val parsedFds = readLocalManifest("fds_covers_jp")
+
+        synchronized(coverIndexLock) {
+            coverIndex.clear()
+            coverIndex.putAll(parsedNa)
+            coverIndexJp.clear()
+            coverIndexJp.putAll(parsedJp)
+            coverIndexFds.clear()
+            coverIndexFds.putAll(parsedFds)
+            coverMisses.clear()
+            coverIndexLoaded = true
+            coverIndexLoading = false
+        }
+    }
+
+    private fun coverManifestCacheFile(name: String): File {
+        return File(File(filesDir, "cover_manifests"), "$name.json")
+    }
+
+    /** Prefers the last downloaded manifest, falling back to the copy bundled in assets. */
+    private fun readLocalManifest(name: String): Map<String, String> {
+        val cacheFile = coverManifestCacheFile(name)
+        if (cacheFile.isFile) {
+            val cached = try {
+                parseCoverManifest(cacheFile.readText())
+            } catch (_: Exception) {
+                null
+            }
+            if (!cached.isNullOrEmpty()) return cached
+        }
+        return try {
+            val bundled = assets.open("covers/$name.json").bufferedReader().use { it.readText() }
+            parseCoverManifest(bundled)
+        } catch (_: Exception) {
+            // Covers are optional; library remains usable with placeholders.
+            emptyMap()
+        }
+    }
+
+    /** Returns true when a newer manifest was downloaded and saved. */
+    private fun refreshRemoteManifest(name: String, baseUrl: String): Boolean {
+        return try {
             val connection = URL(baseUrl + "manifest.json").openConnection().apply {
                 connectTimeout = 5000
                 readTimeout = 10000
             }
             val manifest = connection.getInputStream().bufferedReader().use { it.readText() }
-            val items = JSONObject(manifest).getJSONArray("items")
-            for (i in 0 until items.length()) {
-                val item = items.getJSONObject(i)
-                val title = item.optString("title")
-                val path = item.optString("path", item.optString("file"))
-                if (title.isBlank() || path.isBlank()) continue
-                addCoverIndexEntries(parsed, title, path)
-                addCoverIndexEntries(parsed, path.removeSuffix(".webp"), path)
-                val aliases = item.optJSONArray("aliases")
-                if (aliases != null) {
-                    for (aliasIndex in 0 until aliases.length()) {
-                        addCoverIndexEntries(parsed, aliases.optString(aliasIndex), path)
-                    }
+            if (parseCoverManifest(manifest).isEmpty()) return false
+
+            val cacheFile = coverManifestCacheFile(name)
+            if (cacheFile.isFile && cacheFile.readText() == manifest) return false
+            cacheFile.parentFile?.mkdirs()
+            val tempFile = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
+            tempFile.writeText(manifest)
+            if (!tempFile.renameTo(cacheFile)) {
+                tempFile.copyTo(cacheFile, overwrite = true)
+                tempFile.delete()
+            }
+            true
+        } catch (_: Exception) {
+            // Offline or GitHub unavailable; keep using the local manifest.
+            false
+        }
+    }
+
+    private fun parseCoverManifest(manifest: String): Map<String, String> {
+        val parsed = HashMap<String, String>()
+        val items = JSONObject(manifest).getJSONArray("items")
+        for (i in 0 until items.length()) {
+            val item = items.getJSONObject(i)
+            val title = item.optString("title")
+            val path = item.optString("path", item.optString("file"))
+            if (title.isBlank() || path.isBlank()) continue
+            addCoverIndexEntries(parsed, title, path)
+            addCoverIndexEntries(parsed, path.removeSuffix(".webp"), path)
+            val aliases = item.optJSONArray("aliases")
+            if (aliases != null) {
+                for (aliasIndex in 0 until aliases.length()) {
+                    addCoverIndexEntries(parsed, aliases.optString(aliasIndex), path)
                 }
             }
-        } catch (_: Exception) {
-            // Covers are optional; library remains usable with placeholders.
         }
         return parsed
     }
