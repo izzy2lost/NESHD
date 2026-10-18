@@ -41,6 +41,7 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.izzy2lost.neshd.databinding.ActivityMainBinding
 import org.json.JSONObject
 import java.io.File
@@ -48,6 +49,7 @@ import java.io.IOException
 import java.net.URL
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import kotlin.concurrent.thread
@@ -515,7 +517,8 @@ class MainActivity : AppCompatActivity() {
             .setTitle(rom.name)
             .setItems(
                 arrayOf(
-                    "Install HD Pack",
+                    "Download HD Pack",
+                    "Install HD Pack from ZIP",
                     "Load Save",
                     "Resolution",
                     "Aspect Ratio",
@@ -523,11 +526,12 @@ class MainActivity : AppCompatActivity() {
                 )
             ) { _, which ->
                 when (which) {
-                    0 -> startHdPackInstall(rom)
-                    1 -> launchRom(rom, showLoadStateDialog = true)
-                    2 -> showPerGameVideoFilterDialog(rom)
-                    3 -> showPerGameAspectRatioDialog(rom)
-                    4 -> showCheatManager(rom)
+                    0 -> startHdPackDownload(rom)
+                    1 -> startHdPackInstall(rom)
+                    2 -> launchRom(rom, showLoadStateDialog = true)
+                    3 -> showPerGameVideoFilterDialog(rom)
+                    4 -> showPerGameAspectRatioDialog(rom)
+                    5 -> showCheatManager(rom)
                 }
             }
             .show()
@@ -1407,6 +1411,8 @@ class MainActivity : AppCompatActivity() {
             ?: uri.lastPathSegment ?: "hdpack.zip"
         var hiresPath: String? = null
 
+        // Some packs ship optional variants in subfolders (e.g. Customization/*/hires.txt),
+        // so the hires.txt closest to the zip root wins.
         contentResolver.openInputStream(uri)?.use { input ->
             ZipInputStream(input).use { zip ->
                 var entry: ZipEntry? = zip.nextEntry
@@ -1415,8 +1421,11 @@ class MainActivity : AppCompatActivity() {
                     if (!entry.isDirectory &&
                         (n.equals("hires.txt", ignoreCase = true) ||
                                 n.endsWith("/hires.txt", ignoreCase = true))) {
-                        hiresPath = n
-                        break
+                        val current = hiresPath
+                        if (current == null || n.count { it == '/' } < current.count { it == '/' }) {
+                            hiresPath = n
+                        }
+                        if (!n.contains('/')) break
                     }
                     zip.closeEntry()
                     entry = zip.nextEntry
@@ -1449,7 +1458,13 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun importHdPack(uri: Uri, info: HdPackZipInfo, targetName: String, overwrite: Boolean) {
+    private fun importHdPack(
+        uri: Uri,
+        info: HdPackZipInfo,
+        targetName: String,
+        overwrite: Boolean,
+        onFinished: (() -> Unit)? = null
+    ) {
         val targetDir = AppStorage.hdPackDir(this, targetName)
         Toast.makeText(this, "Installing “$targetName”…", Toast.LENGTH_SHORT).show()
 
@@ -1497,12 +1512,204 @@ class MainActivity : AppCompatActivity() {
                 if (!targetDir.exists() || targetDir.listFiles().isNullOrEmpty()) targetDir.deleteRecursively()
                 "Could not import HD pack: ${ex.message}"
             }
+            onFinished?.invoke()
 
             runOnUiThread {
                 notifyLibraryChanged()
                 Toast.makeText(this, message, Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    // ── HD Pack download ──────────────────────────────────────────────────────
+
+    private fun startHdPackDownload(rom: RomEntry) {
+        val folderName = sanitizeFolderName(romNameWithoutExtension(rom.name))
+        val loading = showProgressDialog("Download HD Pack", "Loading HD pack list…", cancellable = false)
+
+        thread(name = "HdPackCatalog") {
+            val result = runCatching {
+                val packs = HdPackCatalog.load(this)
+                val romSha1 = HdPackCatalog.romFileSha1(this, rom.path)
+                HdPackCatalog.rank(packs, rom.name, romSha1)
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                loading.dialog.dismiss()
+                result.onSuccess { ranked ->
+                    if (ranked.isEmpty()) {
+                        Toast.makeText(this, "No HD packs available", Toast.LENGTH_LONG).show()
+                    } else {
+                        showHdPackChooser(rom, folderName, ranked)
+                    }
+                }.onFailure { ex ->
+                    Toast.makeText(this, ex.message ?: "Could not load HD pack list", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun showHdPackChooser(
+        rom: RomEntry,
+        folderName: String,
+        ranked: List<Pair<HdPackCatalog.Pack, HdPackCatalog.Match>>
+    ) {
+        val hasMatches = ranked.any { it.second != HdPackCatalog.Match.NONE }
+        var showAll = !hasMatches
+        if (!hasMatches) {
+            Toast.makeText(this, "No pack matched this ROM; showing all packs", Toast.LENGTH_SHORT).show()
+        }
+
+        fun show() {
+            val visible = if (showAll) ranked else ranked.filter { it.second != HdPackCatalog.Match.NONE }
+            val labels = visible.map { (pack, match) ->
+                val tag = when (match) {
+                    HdPackCatalog.Match.ROM_HASH -> " · made for your ROM"
+                    HdPackCatalog.Match.TITLE -> " · title match"
+                    HdPackCatalog.Match.NONE -> ""
+                }
+                "${pack.title}\n${formatSize(pack.size)}$tag"
+            }.toTypedArray()
+
+            val builder = MaterialAlertDialogBuilder(this)
+                .setTitle(if (showAll) "All HD Packs" else "HD Packs for ${romNameWithoutExtension(rom.name)}")
+                .setItems(labels) { _, which ->
+                    val (pack, match) = visible[which]
+                    confirmHdPackDownload(pack, match, folderName)
+                }
+                .setNegativeButton("Cancel", null)
+            if (!showAll) {
+                builder.setNeutralButton("Show all") { _, _ ->
+                    showAll = true
+                    show()
+                }
+            }
+            builder.show()
+        }
+        show()
+    }
+
+    private fun confirmHdPackDownload(
+        pack: HdPackCatalog.Pack,
+        match: HdPackCatalog.Match,
+        folderName: String
+    ) {
+        val lines = mutableListOf("Download ${formatSize(pack.size)} and install it for “$folderName”?")
+        if (pack.notes.isNotBlank()) lines += pack.notes
+        when (match) {
+            HdPackCatalog.Match.ROM_HASH -> Unit
+            HdPackCatalog.Match.TITLE ->
+                lines += "This pack may have been made for a different revision of the game."
+            HdPackCatalog.Match.NONE ->
+                lines += "This pack doesn't appear to be for this game and may not work."
+        }
+        if (AppStorage.hdPackDir(this, folderName).exists()) {
+            lines += "The HD pack currently installed for this game will be replaced."
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(pack.title)
+            .setMessage(lines.joinToString("\n\n"))
+            .setPositiveButton("Download") { _, _ -> downloadAndInstallHdPack(pack, folderName) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun downloadAndInstallHdPack(pack: HdPackCatalog.Pack, folderName: String) {
+        val zipFile = File(File(externalCacheDir ?: cacheDir, "hdpack_downloads"), "${pack.id}.zip")
+        val cancelled = AtomicBoolean(false)
+        val progress = showProgressDialog(pack.title, "Starting download…", cancellable = true) {
+            cancelled.set(true)
+        }
+
+        thread(name = "HdPackDownload") {
+            val error = try {
+                HdPackCatalog.download(pack, zipFile, { cancelled.get() }) { downloaded, total ->
+                    runOnUiThread {
+                        if (total > 0) {
+                            progress.bar.isIndeterminate = false
+                            progress.bar.setProgressCompat((downloaded * 100 / total).toInt(), true)
+                        }
+                        progress.text.text = "${formatSize(downloaded)} of ${formatSize(total)}"
+                    }
+                }
+                null
+            } catch (_: HdPackCatalog.CancelledException) {
+                ""
+            } catch (ex: Exception) {
+                ex.message ?: "Download failed"
+            }
+
+            runOnUiThread {
+                if (!isDestroyed) progress.dialog.dismiss()
+                if (error != null) {
+                    zipFile.delete()
+                    if (error.isNotEmpty()) {
+                        Toast.makeText(this, "Could not download HD pack: $error", Toast.LENGTH_LONG).show()
+                    }
+                    return@runOnUiThread
+                }
+                installDownloadedHdPack(zipFile, folderName)
+            }
+        }
+    }
+
+    private fun installDownloadedHdPack(zipFile: File, folderName: String) {
+        val uri = Uri.fromFile(zipFile)
+        val info = try {
+            inspectHdPackZip(uri)
+        } catch (_: IOException) {
+            null
+        }
+        if (info == null) {
+            zipFile.delete()
+            Toast.makeText(this, "Downloaded file is not a valid HD pack", Toast.LENGTH_LONG).show()
+            return
+        }
+        importHdPack(uri, info, folderName, overwrite = true) { zipFile.delete() }
+    }
+
+    private class ProgressDialog(
+        val dialog: androidx.appcompat.app.AlertDialog,
+        val text: TextView,
+        val bar: LinearProgressIndicator
+    )
+
+    private fun showProgressDialog(
+        title: String,
+        message: String,
+        cancellable: Boolean,
+        onCancel: (() -> Unit)? = null
+    ): ProgressDialog {
+        val text = TextView(this).apply {
+            this.text = message
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        }
+        val bar = LinearProgressIndicator(this).apply {
+            isIndeterminate = true
+            max = 100
+        }
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(16), dp(24), dp(8))
+            addView(text)
+            addView(bar, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(16) })
+        }
+        val builder = MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setView(content)
+            .setCancelable(false)
+        if (cancellable) builder.setNegativeButton("Cancel") { _, _ -> onCancel?.invoke() }
+        return ProgressDialog(builder.show(), text, bar)
+    }
+
+    private fun formatSize(bytes: Long): String = when {
+        bytes >= 1_000_000 -> String.format(Locale.US, "%.1f MB", bytes / 1_000_000.0)
+        bytes >= 1_000 -> String.format(Locale.US, "%d KB", bytes / 1_000)
+        else -> "$bytes B"
     }
 
     // ── ROM list persistence ──────────────────────────────────────────────────
