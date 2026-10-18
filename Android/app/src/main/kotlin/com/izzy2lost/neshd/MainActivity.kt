@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.DocumentsContract
 import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
@@ -71,6 +72,7 @@ class MainActivity : AppCompatActivity() {
         const val VIEW_TYPE_GRID = 1
         const val PER_GAME_VIDEO_FILTER_PREFIX = "per_game_video_filter_"
         const val PER_GAME_ASPECT_RATIO_PREFIX = "per_game_aspect_ratio_"
+        const val PREF_ROM_FOLDER_URI = "rom_folder_uri"
         const val PRIVACY_POLICY_URL = "https://www.izzy2lost.com/neshd-privacy"
         const val LICENSE_URL = "https://github.com/izzy2lost/NESHD/blob/main/LICENSE"
         const val NES_HD_REPOSITORY_URL = "https://github.com/izzy2lost/NESHD"
@@ -122,6 +124,7 @@ class MainActivity : AppCompatActivity() {
     ) { uri: Uri? ->
         uri?.let {
             persistReadPermission(it)
+            prefs.edit().putString(PREF_ROM_FOLDER_URI, it.toString()).apply()
             scanFolder(it)
         }
     }
@@ -332,6 +335,9 @@ class MainActivity : AppCompatActivity() {
                 },
                 onScanFolder = {
                     pickFolderLauncher.launch(null)
+                },
+                onRefreshLibrary = {
+                    refreshLibrary()
                 },
                 onSearch = {
                     showSearchBar()
@@ -1369,25 +1375,66 @@ class MainActivity : AppCompatActivity() {
 
     // ── Folder scan ───────────────────────────────────────────────────────────
 
+    /** Rescans the last picked ROM folder without asking for it again. */
+    private fun refreshLibrary() {
+        val folder = savedRomFolderUri()
+        if (folder == null) {
+            Toast.makeText(this, "Pick your ROM folder first", Toast.LENGTH_SHORT).show()
+            pickFolderLauncher.launch(null)
+            return
+        }
+        scanFolder(folder)
+    }
+
+    private fun savedRomFolderUri(): Uri? {
+        val granted = contentResolver.persistedUriPermissions
+            .filter { it.isReadPermission && DocumentsContract.isTreeUri(it.uri) }
+        prefs.getString(PREF_ROM_FOLDER_URI, null)?.let { saved ->
+            granted.firstOrNull { it.uri.toString() == saved }?.let { return it.uri }
+        }
+        // Folders picked before the folder was remembered still hold a persisted grant.
+        return granted.maxByOrNull { it.persistedTime }?.uri
+    }
+
     private fun scanFolder(uri: Uri) {
         val tree = DocumentFile.fromTreeUri(this, uri) ?: return
-        romList.clear()
+        Toast.makeText(this, "Scanning ROM folder…", Toast.LENGTH_SHORT).show()
 
-        fun scanRecursive(dir: DocumentFile) {
-            for (file in dir.listFiles()) {
-                if (file.isDirectory) scanRecursive(file)
-                else {
-                    val n = file.name ?: continue
-                    if (isSupportedRomName(n)) romList.add(RomEntry(n, file.uri.toString()))
+        thread(name = "RomFolderScan") {
+            val found = mutableListOf<RomEntry>()
+
+            fun scanRecursive(dir: DocumentFile) {
+                for (file in dir.listFiles()) {
+                    if (file.isDirectory) scanRecursive(file)
+                    else {
+                        val n = file.name ?: continue
+                        if (isSupportedRomName(n)) found.add(RomEntry(n, file.uri.toString()))
+                    }
                 }
             }
-        }
 
-        scanRecursive(tree)
-        romList.sortBy { it.name }
-        notifyLibraryChanged()
-        saveRomList()
-        Toast.makeText(this, "Found ${romList.size} ROMs", Toast.LENGTH_SHORT).show()
+            val error = try {
+                if (!tree.canRead()) throw IOException("Folder is no longer accessible")
+                scanRecursive(tree)
+                null
+            } catch (ex: Exception) {
+                ex.message ?: "Could not read folder"
+            }
+
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (error != null) {
+                    Toast.makeText(this, "$error. Pick the ROM folder again.", Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                found.sortBy { it.name }
+                romList.clear()
+                romList.addAll(found)
+                notifyLibraryChanged()
+                saveRomList()
+                Toast.makeText(this, "Found ${romList.size} ROMs", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     // ── HD Pack import ────────────────────────────────────────────────────────

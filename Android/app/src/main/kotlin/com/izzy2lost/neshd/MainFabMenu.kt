@@ -52,6 +52,7 @@ fun MainFabMenu(
     visible: Boolean,
     onOpenRom: () -> Unit,
     onScanFolder: () -> Unit,
+    onRefreshLibrary: () -> Unit,
     onSearch: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -60,6 +61,7 @@ fun MainFabMenu(
         var expanded by rememberSaveable { mutableStateOf(false) }
         val items = listOf(
             FabMenuAction(R.drawable.ic_folder_open, "Scan ROM Folder", onScanFolder),
+            FabMenuAction(R.drawable.ic_refresh_24, "Refresh Library", onRefreshLibrary),
             FabMenuAction(R.drawable.ic_add, "Open ROM", onOpenRom),
             FabMenuAction(R.drawable.search_24px, "Search", onSearch)
         )
