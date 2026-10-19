@@ -727,7 +727,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startHdPackInstall(rom: RomEntry) {
-        pendingHdPackFolderName = sanitizeFolderName(romNameWithoutExtension(rom.name))
+        pendingHdPackFolderName = hdPackFolderName(rom)
         pickHdPackLauncher.launch(arrayOf(
             "application/zip",
             "application/x-zip-compressed",
@@ -1275,7 +1275,25 @@ class MainActivity : AppCompatActivity() {
     // ── ROM launching ─────────────────────────────────────────────────────────
 
     private fun launchRomFromUri(uri: Uri) {
+        if (getDisplayNameForUri(uri).endsWith(".zip", ignoreCase = true)) {
+            extractZipRomToCache(uri)?.let { launchRomPath(it.absolutePath) }
+            return
+        }
         copyRomToCache(uri)?.let { launchRomPath(it.absolutePath) }
+    }
+
+    private fun extractZipRomToCache(uri: Uri): File? {
+        val dir = File(cacheDir, "roms/${Integer.toHexString(uri.toString().hashCode())}")
+        dir.deleteRecursively()
+        val rom = try {
+            ZipRomExtractor.extract(this, uri, dir, ::isSupportedRomName).firstOrNull()
+        } catch (_: Exception) {
+            null
+        }
+        if (rom == null) {
+            Toast.makeText(this, "No NES ROM found in this zip", Toast.LENGTH_LONG).show()
+        }
+        return rom
     }
 
     private fun launchRom(
@@ -1402,13 +1420,23 @@ class MainActivity : AppCompatActivity() {
 
         thread(name = "RomFolderScan") {
             val found = mutableListOf<RomEntry>()
+            val extractedDirs = mutableSetOf<String>()
 
             fun scanRecursive(dir: DocumentFile) {
                 for (file in dir.listFiles()) {
                     if (file.isDirectory) scanRecursive(file)
                     else {
                         val n = file.name ?: continue
-                        if (isSupportedRomName(n)) found.add(RomEntry(n, file.uri.toString()))
+                        if (isSupportedRomName(n)) {
+                            found.add(RomEntry(n, file.uri.toString()))
+                        } else if (n.endsWith(".zip", ignoreCase = true)) {
+                            // Zips without a ROM inside are simply skipped, as are unreadable ones.
+                            val result = runCatching {
+                                ZipRomExtractor.extractCached(this, file, ::isSupportedRomName)
+                            }.getOrNull() ?: continue
+                            extractedDirs += result.dirName
+                            result.roms.forEach { found.add(RomEntry(it.name, it.absolutePath)) }
+                        }
                     }
                 }
             }
@@ -1416,6 +1444,7 @@ class MainActivity : AppCompatActivity() {
             val error = try {
                 if (!tree.canRead()) throw IOException("Folder is no longer accessible")
                 scanRecursive(tree)
+                ZipRomExtractor.prune(this, extractedDirs)
                 null
             } catch (ex: Exception) {
                 ex.message ?: "Could not read folder"
@@ -1571,7 +1600,7 @@ class MainActivity : AppCompatActivity() {
     // ── HD Pack download ──────────────────────────────────────────────────────
 
     private fun startHdPackDownload(rom: RomEntry) {
-        val folderName = sanitizeFolderName(romNameWithoutExtension(rom.name))
+        val folderName = hdPackFolderName(rom)
         val loading = showProgressDialog("Download HD Pack", "Loading HD pack list…", cancellable = false)
 
         thread(name = "HdPackCatalog") {
@@ -1790,8 +1819,15 @@ class MainActivity : AppCompatActivity() {
     private fun isSupportedRomName(name: String) =
         supportedRomExtensions.any { name.endsWith(it, ignoreCase = true) }
 
+    /**
+     * The core loads HdPacks/<launched file name without extension>/hires.txt, and launched
+     * files are always named with [sanitizeFileName], so the folder must use the same rule.
+     */
+    private fun hdPackFolderName(rom: RomEntry) =
+        romNameWithoutExtension(sanitizeFileName(rom.name))
+
     private fun hasInstalledHdPack(rom: RomEntry): Boolean {
-        val folderName = sanitizeFolderName(romNameWithoutExtension(rom.name))
+        val folderName = hdPackFolderName(rom)
         val hdPackDir = AppStorage.hdPackDir(this, folderName)
         return File(hdPackDir, "hires.txt").isFile
     }
