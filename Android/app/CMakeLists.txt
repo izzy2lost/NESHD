@@ -74,9 +74,11 @@ set_source_files_properties(${RC_SRC} PROPERTIES
     COMPILE_DEFINITIONS "RC_HASH_NO_DISC;RC_HASH_NO_ENCRYPTED;RC_HASH_NO_ZIP;RC_DISABLE_LUA"
     INCLUDE_DIRECTORIES "${RC_DIR}/src;${RC_DIR}/src/rhash;${RC_DIR}/src/rapi"
 )
-# rc_version.h (the version string for the User-Agent) is not a public header.
+# Only the User-Agent needs these: rc_version.h is not a public header, and the
+# app version (from versionName) stays off every other file so a bump rebuilds one.
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/cheevos_client.cpp" PROPERTIES
     INCLUDE_DIRECTORIES "${RC_DIR}/src"
+    COMPILE_DEFINITIONS "NESHD_VERSION=\"${NESHD_VERSION}\""
 )
 
 # ── Library target ────────────────────────────────────────────────────────────
@@ -106,8 +108,6 @@ target_compile_definitions(MesenCore PRIVATE
     MESEN_DISABLE_DEBUGGER=1
     # Disable NetPlay networking on Android (uses sockets not needed)
     MESEN_NO_NETPLAY=1
-    # Sent to RetroAchievements in the User-Agent; set from the app's versionName.
-    NESHD_VERSION="${NESHD_VERSION}"
 )
 
 # ── Compile options ───────────────────────────────────────────────────────────
