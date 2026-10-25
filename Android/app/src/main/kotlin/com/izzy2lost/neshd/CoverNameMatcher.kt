@@ -24,6 +24,9 @@ object CoverNameMatcher {
             linkedSetOf(
                 base,
                 stripped,
+                // Extracted zip names carry their tags as "_Japan_ _T-En by ..._", which
+                // stripDecorations can't tell from the title.
+                displayTitle(rawName),
                 moveTrailingArticle(base),
                 moveTrailingArticle(stripped),
                 stripped.substringBefore(" - ").trim(),

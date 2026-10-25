@@ -724,6 +724,13 @@ class MainActivity : AppCompatActivity() {
                 extraLayoutSpace[0] = extra
                 extraLayoutSpace[1] = extra
             }
+
+            // Every layout (new list, rebinds, resize, cover art arriving) can move covers
+            // without a scroll callback; positions are only final once it completes.
+            override fun onLayoutCompleted(state: RecyclerView.State) {
+                super.onLayoutCompleted(state)
+                applyCarouselTransforms()
+            }
         }
         val carousel = binding.romCarousel
         carousel.layoutManager = carouselLayoutManager
@@ -742,16 +749,6 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
-        // Rebinds (resize, cover art arriving) attach children without a scroll callback.
-        carousel.addOnChildAttachStateChangeListener(
-            object : RecyclerView.OnChildAttachStateChangeListener {
-                override fun onChildViewAttachedToWindow(view: View) {
-                    carousel.postOnAnimation { applyCarouselTransforms() }
-                }
-
-                override fun onChildViewDetachedFromWindow(view: View) {}
-            }
-        )
         binding.romCarouselContainer.addOnLayoutChangeListener {
                 _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
             if ((right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) &&
@@ -819,7 +816,6 @@ class MainActivity : AppCompatActivity() {
         val index = adapter.roms.indexOfFirst { it.path == carouselCenteredPath }.coerceAtLeast(0)
         // The offset is from the start padding, which is what centers an item.
         carouselLayoutManager.scrollToPositionWithOffset(adapter.positionOf(index), 0)
-        binding.romCarousel.post { applyCarouselTransforms() }
     }
 
     private fun rememberCarouselCenter() {

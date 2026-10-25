@@ -75,4 +75,25 @@ class CoverNameMatcherTest {
             CoverNameMatcher.displayTitle("Wai Wai World 2 - SOS__ Paseri Jou _Japan_.nes")
         )
     }
+
+    @Test
+    fun matchesTranslatedRomsExtractedFromZips() {
+        val index = mapOf(
+            CoverNameMatcher.normalizeKey("Final Fantasy") to "Final Fantasy.webp",
+            CoverNameMatcher.normalizeKey("Final Fantasy II") to "Final Fantasy II.webp",
+            CoverNameMatcher.normalizeKey("Final Fantasy III") to "Final Fantasy III.webp"
+        )
+
+        fun lookup(name: String) =
+            CoverNameMatcher.lookupCandidates(name).firstNotNullOfOrNull { index[it] }
+
+        assertEquals(
+            "Final Fantasy II.webp",
+            lookup("Final Fantasy II _Japan_ _T-En by Demiforce v1.03_ _Add by Chaos Rush v2.2b_.nes")
+        )
+        assertEquals(
+            "Final Fantasy III.webp",
+            lookup("Final Fantasy III _Japan_ _T-En by Chaos Rush v1.3_.nes")
+        )
+    }
 }
