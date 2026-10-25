@@ -46,6 +46,8 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.LinearSnapHelper
 import androidx.recyclerview.widget.RecyclerView
+import androidx.appcompat.app.AlertDialog
+import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.izzy2lost.neshd.databinding.ActivityMainBinding
@@ -1557,6 +1559,13 @@ class MainActivity : AppCompatActivity() {
             pickBiosLauncher.launch(arrayOf("application/octet-stream", "*/*"))
         }
 
+        binding.drawerSettings.cheevosAccountRow.setOnClickListener {
+            if (Achievements.isSignedIn(this)) confirmCheevosSignOut() else showCheevosSignIn()
+        }
+        binding.drawerSettings.cheevosSignUpRow.setOnClickListener {
+            openExternalLink(Achievements.SIGN_UP_URL)
+        }
+
         binding.drawerSettings.versionValue.text = getString(
             R.string.about_version,
             packageManager.getPackageInfo(packageName, 0).versionName
@@ -1631,6 +1640,95 @@ class MainActivity : AppCompatActivity() {
 
         val biosInstalled = fdsBiosFile().exists()
         binding.drawerSettings.fdsBiosStatus.text = if (biosInstalled) "Installed" else "Not installed"
+
+        syncCheevosSettings()
+    }
+
+    // ── RetroAchievements ─────────────────────────────────────────────────────
+
+    private fun syncCheevosSettings() {
+        val drawer = binding.drawerSettings
+        drawer.cheevosAccountValue.text = if (Achievements.isSignedIn(this)) {
+            getString(R.string.settings_cheevos_signed_in, Achievements.displayName(this))
+        } else {
+            getString(R.string.settings_cheevos_signed_out)
+        }
+
+        drawer.switchCheevos.setOnCheckedChangeListener(null)
+        drawer.switchCheevos.isChecked = Achievements.isEnabled(this)
+        drawer.switchCheevos.setOnCheckedChangeListener { _, checked ->
+            Achievements.setEnabled(this, checked)
+        }
+
+        drawer.switchCheevosNotifications.setOnCheckedChangeListener(null)
+        drawer.switchCheevosNotifications.isChecked = Achievements.notificationsEnabled(this)
+        drawer.switchCheevosNotifications.setOnCheckedChangeListener { _, checked ->
+            Achievements.setNotificationsEnabled(this, checked)
+        }
+    }
+
+    private fun showCheevosSignIn() {
+        val content = LayoutInflater.from(this).inflate(R.layout.dialog_cheevos_login, null, false)
+        val user = content.findViewById<TextView>(R.id.cheevosLoginUser)
+        val password = content.findViewById<TextView>(R.id.cheevosLoginPassword)
+        val status = content.findViewById<TextView>(R.id.cheevosLoginStatus)
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.cheevos_sign_in_title)
+            .setIcon(R.drawable.ic_trophy)
+            .setView(content)
+            .setPositiveButton(R.string.cheevos_sign_in, null)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setNeutralButton(R.string.settings_cheevos_sign_up) { _, _ ->
+                openExternalLink(Achievements.SIGN_UP_URL)
+            }
+            .create()
+        dialog.setOnShowListener {
+            val go = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            go.setOnClickListener {
+                val u = user.text.toString().trim()
+                val p = password.text.toString()
+                if (u.isEmpty() || p.isEmpty()) return@setOnClickListener
+                go.isEnabled = false
+                status.setTextColor(MaterialColors.getColor(status, com.google.android.material.R.attr.colorOnSurfaceVariant))
+                status.setText(R.string.cheevos_signing_in)
+                status.visibility = View.VISIBLE
+                // Blocking network call: the native client signs in and hands back a token.
+                thread(name = "CheevosLogin") {
+                    val result = runCatching { NativeLib.cheevosLogin(u, p) }
+                        .getOrElse { arrayOf("", it.message.orEmpty()) }
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (result.getOrNull(0).isNullOrEmpty()) {
+                            go.isEnabled = true
+                            status.setTextColor(MaterialColors.getColor(status, androidx.appcompat.R.attr.colorError))
+                            status.text = getString(R.string.cheevos_sign_in_error, result.getOrNull(1).orEmpty())
+                        } else {
+                            Achievements.signIn(this, result[0], result[1], result.getOrNull(2).orEmpty())
+                            Toast.makeText(
+                                this,
+                                getString(R.string.cheevos_signed_in_toast, Achievements.displayName(this)),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            syncCheevosSettings()
+                            dialog.dismiss()
+                        }
+                    }
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun confirmCheevosSignOut() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.cheevos_sign_out)
+            .setMessage(R.string.cheevos_sign_out_confirm)
+            .setPositiveButton(R.string.cheevos_sign_out) { _, _ ->
+                Achievements.signOut(this)
+                syncCheevosSettings()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun fdsBiosFile(): File =

@@ -8,6 +8,8 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
@@ -41,6 +43,15 @@ class EmulatorActivity : AppCompatActivity() {
     private var isFdsRom = false
     private val pressedControllerKeys = mutableSetOf<Int>()
     private val pressedControllerButtons = mutableSetOf<Int>()
+    private var cheevoPopups: Achievements.Popups? = null
+    private val cheevoHandler = Handler(Looper.getMainLooper())
+    private val cheevoPoll = object : Runnable {
+        override fun run() {
+            if (emulatorStopped) return
+            cheevoPopups?.poll()
+            cheevoHandler.postDelayed(this, 250)
+        }
+    }
 
     companion object {
         const val EXTRA_ROM_PATH = "ROM_PATH"
@@ -113,6 +124,9 @@ class EmulatorActivity : AppCompatActivity() {
             return
         }
         applyEnabledCheats()
+        // Before any state load, so the state's achievement progress is restored with it.
+        Achievements.beginForLoadedGame(this)
+        cheevoPopups = Achievements.Popups(this, binding.root)
         loadStateSlot?.let { slot ->
             val ok = NativeLib.loadState(slot)
             Toast.makeText(
@@ -140,6 +154,8 @@ class EmulatorActivity : AppCompatActivity() {
         } else {
             NativeLib.resume()
         }
+        cheevoHandler.removeCallbacks(cheevoPoll)
+        cheevoHandler.post(cheevoPoll)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -149,6 +165,7 @@ class EmulatorActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
+        cheevoHandler.removeCallbacks(cheevoPoll)
         releaseControllerButtons()
         binding.touchController.releaseAllButtons()
         NativeLib.pause()
@@ -244,6 +261,11 @@ class EmulatorActivity : AppCompatActivity() {
         }
         val saveButton = buildMenuButton("Save state", R.drawable.ic_save_24, MenuButtonTone.PRIMARY)
         val loadButton = buildMenuButton("Load state", R.drawable.ic_restore_24, MenuButtonTone.PRIMARY)
+        val achievementsButton = buildMenuButton(
+            getString(R.string.menu_achievements),
+            R.drawable.ic_trophy,
+            MenuButtonTone.SECONDARY
+        )
         val switchFdsSideButton = if (isFdsRom) {
             buildMenuButton("Switch FDS disk side", R.drawable.ic_swap_vert_24, MenuButtonTone.SECONDARY)
         } else {
@@ -257,6 +279,7 @@ class EmulatorActivity : AppCompatActivity() {
         val exitButton = buildMenuButton("Exit to game list", R.drawable.ic_exit_to_app_24, MenuButtonTone.DANGER)
         content.addView(saveButton)
         content.addView(loadButton)
+        content.addView(achievementsButton)
         switchFdsSideButton?.let(content::addView)
         nextFdsDiskButton?.let(content::addView)
         content.addView(exitButton)
@@ -274,6 +297,10 @@ class EmulatorActivity : AppCompatActivity() {
             dialog.dismiss()
             showSaveStateDialog(SaveStateDialogMode.LOAD)
         }
+        achievementsButton.setOnClickListener {
+            dialog.dismiss()
+            Achievements.showList(this) { presentDialog(it) }
+        }
         switchFdsSideButton?.setOnClickListener {
             NativeLib.switchFdsDiskSide()
             Toast.makeText(this, "Switching FDS disk side", Toast.LENGTH_SHORT).show()
@@ -289,6 +316,19 @@ class EmulatorActivity : AppCompatActivity() {
             exitToGameList()
         }
 
+        dialog.setOnDismissListener {
+            resumeAfterDialog()
+        }
+        dialog.setOnShowListener {
+            hideSystemUi()
+        }
+        dialog.show()
+    }
+
+    /** Shows [dialog] with the game paused behind it, as the game menu's dialogs do. */
+    private fun presentDialog(dialog: AlertDialog) {
+        if (emulatorStopped) return
+        pauseForDialog()
         dialog.setOnDismissListener {
             resumeAfterDialog()
         }
@@ -619,6 +659,8 @@ class EmulatorActivity : AppCompatActivity() {
 
     private fun stopEmulator() {
         if (emulatorStopped) return
+        cheevoHandler.removeCallbacks(cheevoPoll)
+        cheevoPopups?.clear()
         NativeLib.flushBatterySave()
         NativeLib.stopRom()
         emulatorStopped = true

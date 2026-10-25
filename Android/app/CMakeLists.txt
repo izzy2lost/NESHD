@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 
+set(NESHD_VERSION "0.0" CACHE STRING "App version reported to RetroAchievements")
+
 # Source root is two levels up from Android/app/
 set(MESEN_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
@@ -50,12 +52,40 @@ file(GLOB JNI_SRC
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/*.cpp"
 )
 
+# RetroAchievements (rcheevos, vendored). Whole runtime directory: its translation
+# units reference each other freely. Not built: disc/encrypted/zip hashing (NES ROMs
+# reach it as plain files), rc_client_raintegration.c (Windows) and rc_libretro.c.
+set(RC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rcheevos")
+file(GLOB RC_RUNTIME_SRC "${RC_DIR}/src/rcheevos/*.c")
+file(GLOB RC_API_SRC "${RC_DIR}/src/rapi/*.c")
+set(RC_SRC
+    ${RC_RUNTIME_SRC}
+    ${RC_API_SRC}
+    "${RC_DIR}/src/rc_client.c"
+    "${RC_DIR}/src/rhash/hash.c"
+    "${RC_DIR}/src/rhash/hash_rom.c"
+    "${RC_DIR}/src/rhash/md5.c"
+    "${RC_DIR}/src/rc_util.c"
+    "${RC_DIR}/src/rc_compat.c"
+    "${RC_DIR}/src/rc_version.c"
+)
+# Its private headers stay off the Mesen sources' include path (both have an md5.h).
+set_source_files_properties(${RC_SRC} PROPERTIES
+    COMPILE_DEFINITIONS "RC_HASH_NO_DISC;RC_HASH_NO_ENCRYPTED;RC_HASH_NO_ZIP;RC_DISABLE_LUA"
+    INCLUDE_DIRECTORIES "${RC_DIR}/src;${RC_DIR}/src/rhash;${RC_DIR}/src/rapi"
+)
+# rc_version.h (the version string for the User-Agent) is not a public header.
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp/cheevos_client.cpp" PROPERTIES
+    INCLUDE_DIRECTORIES "${RC_DIR}/src"
+)
+
 # ── Library target ────────────────────────────────────────────────────────────
 add_library(MesenCore SHARED
     ${CORE_SRC}
     ${UTIL_CPP_SRC}
     ${UTIL_C_SRC}
     ${SEVENZIP_SRC}
+    ${RC_SRC}
     ${JNI_SRC}
 )
 
@@ -65,6 +95,7 @@ target_include_directories(MesenCore PRIVATE
     "${MESEN_ROOT}/Core"
     "${MESEN_ROOT}/Utilities"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/main/cpp"
+    "${RC_DIR}/include"
 )
 
 # ── Compile definitions ───────────────────────────────────────────────────────
@@ -75,6 +106,8 @@ target_compile_definitions(MesenCore PRIVATE
     MESEN_DISABLE_DEBUGGER=1
     # Disable NetPlay networking on Android (uses sockets not needed)
     MESEN_NO_NETPLAY=1
+    # Sent to RetroAchievements in the User-Agent; set from the app's versionName.
+    NESHD_VERSION="${NESHD_VERSION}"
 )
 
 # ── Compile options ───────────────────────────────────────────────────────────

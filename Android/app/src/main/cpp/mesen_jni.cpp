@@ -32,6 +32,7 @@
 #include "android_renderer.h"
 #include "android_audio.h"
 #include "android_key_manager.h"
+#include "cheevos_session.h"
 
 #define TAG "MesenJNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
@@ -293,8 +294,39 @@ static GLuint CreateProgram()
     return p;
 }
 
+static jobjectArray ToJavaStrings(JNIEnv* env, const std::vector<std::string>& values)
+{
+    jclass stringClass = env->FindClass("java/lang/String");
+    jobjectArray out = env->NewObjectArray((jsize)values.size(), stringClass, nullptr);
+    for(size_t i = 0; i < values.size(); i++) {
+        jstring value = env->NewStringUTF(values[i].c_str());
+        env->SetObjectArrayElement(out, (jsize)i, value);
+        env->DeleteLocalRef(value);
+    }
+    env->DeleteLocalRef(stringClass);
+    return out;
+}
+
+static std::string FromJavaString(JNIEnv* env, jstring value)
+{
+    if (!value) return "";
+    const char* chars = env->GetStringUTFChars(value, nullptr);
+    std::string out = chars ? chars : "";
+    env->ReleaseStringUTFChars(value, chars);
+    return out;
+}
+
 // ── JNI functions ─────────────────────────────────────────────────────────────
 extern "C" {
+
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/)
+{
+    JNIEnv* env = nullptr;
+    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) {
+        neshd::cheevos::InitJni(vm, env);
+    }
+    return JNI_VERSION_1_6;
+}
 
 // Called once on startup from EmulatorActivity.onCreate()
 JNIEXPORT void JNICALL
@@ -369,6 +401,7 @@ Java_com_izzy2lost_neshd_NativeLib_release(JNIEnv* /*env*/, jobject /*thiz*/)
     if (!g_emu) return;
     g_renderer.reset();
     g_emu->Stop(true);
+    neshd::cheevos::EndSession();
     g_emu->Release();
     if (g_messageManager) {
         MessageManager::UnregisterMessageManager(g_messageManager.get());
@@ -396,6 +429,8 @@ Java_com_izzy2lost_neshd_NativeLib_loadRom(JNIEnv* env, jobject /*thiz*/, jstrin
         return JNI_FALSE;
     }
 
+    // Achievements belong to the game they started with.
+    neshd::cheevos::EndSession();
     bool ok = g_emu->LoadRom(romFile, VirtualFile());
     g_lastBatteryFlush = std::chrono::steady_clock::now();
     env->ReleaseStringUTFChars(romPath, path);
@@ -407,6 +442,7 @@ JNIEXPORT void JNICALL
 Java_com_izzy2lost_neshd_NativeLib_stopRom(JNIEnv* /*env*/, jobject /*thiz*/)
 {
     if (g_emu) g_emu->Stop(false);
+    neshd::cheevos::EndSession();
 }
 
 JNIEXPORT void JNICALL
@@ -500,6 +536,7 @@ Java_com_izzy2lost_neshd_NativeLib_saveState(JNIEnv* /*env*/, jobject /*thiz*/, 
     std::string path = GetSaveStatePath(slot);
     bool ok = g_emu->GetSaveStateManager()->SaveState(path, false);
     if (ok) {
+        neshd::cheevos::AfterSaveState(path);
         MessageManager::DisplayMessage("SaveStates", "SaveStateSaved", std::to_string(slot));
     }
     return ok ? JNI_TRUE : JNI_FALSE;
@@ -512,8 +549,10 @@ Java_com_izzy2lost_neshd_NativeLib_loadState(JNIEnv* /*env*/, jobject /*thiz*/, 
         return JNI_FALSE;
     }
 
-    bool ok = g_emu->GetSaveStateManager()->LoadState(GetSaveStatePath(slot), false);
+    std::string path = GetSaveStatePath(slot);
+    bool ok = g_emu->GetSaveStateManager()->LoadState(path, false);
     if (ok) {
+        neshd::cheevos::AfterLoadState(path);
         MessageManager::DisplayMessage("SaveStates", "SaveStateLoaded", std::to_string(slot));
     }
     return ok ? JNI_TRUE : JNI_FALSE;
@@ -768,6 +807,45 @@ Java_com_izzy2lost_neshd_NativeLib_glDestroy(JNIEnv* /*env*/, jobject /*thiz*/)
     if (g_vbo)     { glDeleteBuffers(1, &g_vbo);       g_vbo = 0; }
     if (g_texture) { glDeleteTextures(1, &g_texture);  g_texture = 0; }
     if (g_program) { glDeleteProgram(g_program);       g_program = 0; }
+}
+
+// ── RetroAchievements ─────────────────────────────────────────────────────────
+
+// After loadRom: signs in and loads the game's achievements in the background.
+JNIEXPORT void JNICALL
+Java_com_izzy2lost_neshd_NativeLib_cheevosBegin(JNIEnv* env, jobject /*thiz*/,
+                                                jstring user, jstring token)
+{
+    if (!g_emu || !g_emu->IsRunning()) return;
+    neshd::cheevos::BeginSession(g_emu.get(), FromJavaString(env, user), FromJavaString(env, token));
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_izzy2lost_neshd_NativeLib_cheevosMessages(JNIEnv* env, jobject /*thiz*/)
+{
+    return ToJavaStrings(env, neshd::cheevos::TakeMessages());
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_izzy2lost_neshd_NativeLib_cheevosList(JNIEnv* env, jobject /*thiz*/)
+{
+    return ToJavaStrings(env, neshd::cheevos::ListAchievements());
+}
+
+// Settings' sign-in: blocking, off the UI thread, no game needed. Returns
+// {username, token, display name, score} on success, {"", error} on failure.
+JNIEXPORT jobjectArray JNICALL
+Java_com_izzy2lost_neshd_NativeLib_cheevosLogin(JNIEnv* env, jobject /*thiz*/,
+                                                jstring user, jstring password)
+{
+    auto http = neshd::cheevos::MakeJniBackend();
+    std::string username, token, displayName, err;
+    uint32_t score = 0;
+    if (neshd::cheevos::login_with_password(*http, FromJavaString(env, user), FromJavaString(env, password),
+                                            username, token, displayName, score, err)) {
+        return ToJavaStrings(env, { username, token, displayName, std::to_string(score) });
+    }
+    return ToJavaStrings(env, { "", err });
 }
 
 JNIEXPORT jstring JNICALL

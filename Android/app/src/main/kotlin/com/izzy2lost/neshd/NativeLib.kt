@@ -221,6 +221,16 @@ object NativeLib {
     /** Maps to NesConfig.RemoveSpriteLimit + AdaptiveSpriteLimit. */
     external fun setAntiFlicker(enabled: Boolean)
 
+    // RetroAchievements
+    /** After [loadRom]: signs in and loads the game's achievements in the background. */
+    external fun cheevosBegin(user: String, token: String)
+    /** Messages to show: kind, title, detail, points, badge URL, separated by \u001f. */
+    external fun cheevosMessages(): Array<String>
+    /** Header row (state, game, game badge, unlocked, total, points, total points), then one row per achievement. */
+    external fun cheevosList(): Array<String>
+    /** Blocking sign-in for Settings: {user, token, display name, score}, or {"", error}. */
+    external fun cheevosLogin(user: String, password: String): Array<String>
+
     // OpenGL (called on the GL thread)
     external fun glInit()
     external fun glDrawFrame(viewWidth: Int, viewHeight: Int)
