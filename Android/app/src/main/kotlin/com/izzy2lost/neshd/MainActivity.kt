@@ -7,14 +7,17 @@ import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.PorterDuff
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.DecelerateInterpolator
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -27,6 +30,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.runtime.getValue
+import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
@@ -40,6 +44,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.LinearSnapHelper
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.progressindicator.LinearProgressIndicator
@@ -50,10 +55,14 @@ import java.io.IOException
 import java.net.URL
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.concurrent.LinkedBlockingDeque
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import kotlin.concurrent.thread
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity() {
 
@@ -63,13 +72,30 @@ class MainActivity : AppCompatActivity() {
 
     private var pendingHdPackFolderName: String? = null
     private var isFabMenuVisible by mutableStateOf(true)
-    private var useCoverGrid = false
+    private var viewMode = LibraryViewMode.LIST
+
+    private lateinit var carouselLayoutManager: LinearLayoutManager
+    private val carouselSnapHelper = LinearSnapHelper()
+    private var carouselAdapter: CarouselAdapter? = null
+    // Which ROM sits in the middle of the carousel, so a refresh keeps it there.
+    private var carouselCenteredPath: String? = null
 
     private lateinit var drawerBackCallback: OnBackPressedCallback
 
     private companion object {
         const val VIEW_TYPE_LIST = 0
         const val VIEW_TYPE_GRID = 1
+        const val PREF_LIBRARY_VIEW_MODE = "library_view_mode"
+        const val PREF_CAROUSEL_ROM_PATH = "library_carousel_rom_path"
+        // Below this many games a looping carousel shows the same cover twice.
+        const val CAROUSEL_MIN_LOOP_SIZE = 4
+        const val CAROUSEL_CENTER_SCALE = 1.12f
+        const val CAROUSEL_SIDE_SCALE = 0.72f
+        const val CAROUSEL_SIDE_BRIGHTNESS = 0.42f
+        const val CAROUSEL_SIDE_TILT_DEGREES = 28f
+        const val CAROUSEL_CENTER_SCROLL_MS = 260
+        // NES cover art width:height, matching the 452:701 ratio of the item layouts.
+        const val COVER_ASPECT = 452f / 701f
         const val PER_GAME_VIDEO_FILTER_PREFIX = "per_game_video_filter_"
         const val PER_GAME_ASPECT_RATIO_PREFIX = "per_game_aspect_ratio_"
         const val PREF_ROM_FOLDER_URI = "rom_folder_uri"
@@ -80,6 +106,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     data class RomEntry(val name: String, val path: String)
+
+    private enum class LibraryViewMode { LIST, GRID, CAROUSEL }
 
     private data class CoverMatch(val path: String, val region: NesRomDatabase.Region)
 
@@ -104,7 +132,12 @@ class MainActivity : AppCompatActivity() {
     private val coverMemoryCache = object : LinkedHashMap<String, Bitmap>(32, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?) = size > 48
     }
-    private val coverDownloads = mutableSetOf<String>()
+    /** Views waiting on a cover decode or download, by cover memory key. */
+    private val coverWaiters = HashMap<String, MutableList<Pair<ImageView, String>>>()
+    // Bounded, so a fling past dozens of games can't start dozens of downloads at once.
+    private val coverDecodeExecutor = newestFirstExecutor(2)
+    private val coverDownloadExecutor = newestFirstExecutor(4)
+    private val coverIdentifyExecutor = newestFirstExecutor(2)
     private val coverMisses = mutableSetOf<String>()
     private val coverIdentityLock = Any()
     private val coverTitleByRomPath = HashMap<String, String?>()
@@ -162,6 +195,7 @@ class MainActivity : AppCompatActivity() {
         setSupportActionBar(binding.toolbar)
 
         setupEdgeToEdgeInsets()
+        compactLandscapeHeader()
         setupBackCallbacks()
         setupThemeToggle()
         setupFabMenu()
@@ -228,6 +262,7 @@ class MainActivity : AppCompatActivity() {
     private fun setupEdgeToEdgeInsets() {
         val appBarPadding = binding.appBarLayout.initialPadding()
         val romListPadding = binding.romRecyclerView.initialPadding()
+        val carouselPadding = binding.romCarouselContainer.initialPadding()
         val drawerPadding = binding.settingsDrawerContainer.initialPadding()
         val fabMenuMargins = binding.fabMenu.initialMargins()
 
@@ -258,6 +293,13 @@ class MainActivity : AppCompatActivity() {
                 bottom = romListPadding.bottom + bottomInset
             )
 
+            binding.romCarouselContainer.updatePadding(
+                left = carouselPadding.left + leftInset,
+                top = carouselPadding.top,
+                right = carouselPadding.right + rightInset,
+                bottom = carouselPadding.bottom + bottomInset
+            )
+
             binding.settingsDrawerContainer.updatePadding(
                 left = drawerPadding.left + leftInset,
                 top = drawerPadding.top + topInset,
@@ -270,6 +312,22 @@ class MainActivity : AppCompatActivity() {
             insets
         }
         ViewCompat.requestApplyInsets(binding.drawerLayout)
+    }
+
+    /**
+     * Landscape is short on height, so the view toggles move up into the toolbar row, beside
+     * the settings button, and the hint is dropped. That height goes to the cover carousel.
+     */
+    private fun compactLandscapeHeader() {
+        if (!isLandscape()) return
+        val toolbarHeight = binding.toolbar.layoutParams.height
+        (binding.libraryHint.parent as View).visibility = View.GONE
+        binding.libraryControls.gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        binding.libraryControls.updatePadding(top = 0, bottom = 0, right = toolbarHeight)
+        binding.libraryControls.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+            height = toolbarHeight
+            topMargin = -toolbarHeight
+        }
     }
 
     private fun View.initialPadding() =
@@ -350,14 +408,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupRomList() {
         adapter = RomLibraryAdapter()
-        useCoverGrid = prefs.getBoolean("library_cover_grid", false)
+        viewMode = prefs.getString(PREF_LIBRARY_VIEW_MODE, null)
+            ?.let { saved -> LibraryViewMode.entries.firstOrNull { it.name == saved } }
+            ?: if (prefs.getBoolean("library_cover_grid", false)) LibraryViewMode.GRID else LibraryViewMode.LIST
+        carouselCenteredPath = prefs.getString(PREF_CAROUSEL_ROM_PATH, null)
 
         binding.btnViewList.isCheckable = true
         binding.btnViewGrid.isCheckable = true
-        binding.btnViewList.setOnClickListener { setDisplayMode(false) }
-        binding.btnViewGrid.setOnClickListener { setDisplayMode(true) }
+        binding.btnViewCarousel.isCheckable = true
+        binding.btnViewList.setOnClickListener { setDisplayMode(LibraryViewMode.LIST) }
+        binding.btnViewGrid.setOnClickListener { setDisplayMode(LibraryViewMode.GRID) }
+        binding.btnViewCarousel.setOnClickListener { setDisplayMode(LibraryViewMode.CAROUSEL) }
 
         binding.romRecyclerView.adapter = adapter
+        setupCarousel()
         syncDisplayMode()
         loadRomList()
         syncEmptyState()
@@ -374,22 +438,40 @@ class MainActivity : AppCompatActivity() {
         ensureCoverIndexLoaded()
     }
 
-    private fun setDisplayMode(grid: Boolean) {
-        if (grid == useCoverGrid) return
-        useCoverGrid = grid
-        prefs.edit().putBoolean("library_cover_grid", useCoverGrid).apply()
+    private fun setDisplayMode(mode: LibraryViewMode) {
+        if (mode == viewMode) {
+            syncDisplayModeButtons()
+            return
+        }
+        viewMode = mode
+        prefs.edit().putString(PREF_LIBRARY_VIEW_MODE, viewMode.name).apply()
         syncDisplayMode()
     }
 
+    private fun syncDisplayModeButtons() {
+        binding.btnViewList.isChecked = viewMode == LibraryViewMode.LIST
+        binding.btnViewGrid.isChecked = viewMode == LibraryViewMode.GRID
+        binding.btnViewCarousel.isChecked = viewMode == LibraryViewMode.CAROUSEL
+    }
+
     private fun syncDisplayMode() {
-        binding.btnViewList.isChecked = !useCoverGrid
-        binding.btnViewGrid.isChecked = useCoverGrid
-        binding.romRecyclerView.layoutManager = createLibraryLayoutManager()
-        adapter.setGridMode(useCoverGrid)
+        syncDisplayModeButtons()
+        val carousel = viewMode == LibraryViewMode.CAROUSEL
+        binding.romRecyclerView.visibility = if (carousel) View.GONE else View.VISIBLE
+        binding.romCarouselContainer.visibility = if (carousel) View.VISIBLE else View.GONE
+        if (carousel) {
+            isFabMenuVisible = true
+            renderCarousel()
+        } else {
+            carouselAdapter = null
+            binding.romCarousel.adapter = null
+            binding.romRecyclerView.layoutManager = createLibraryLayoutManager()
+            adapter.setGridMode(viewMode == LibraryViewMode.GRID)
+        }
     }
 
     private fun createLibraryLayoutManager(): RecyclerView.LayoutManager {
-        return if (useCoverGrid) {
+        return if (viewMode == LibraryViewMode.GRID) {
             GridLayoutManager(this, resolveCoverGridSpanCount())
         } else {
             LinearLayoutManager(this)
@@ -407,8 +489,7 @@ class MainActivity : AppCompatActivity() {
         override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
         override fun afterTextChanged(s: android.text.Editable?) {
             searchQuery = s?.toString() ?: ""
-            adapter.notifyDataSetChanged()
-            syncEmptyState()
+            notifyLibraryChanged()
         }
     }
 
@@ -426,14 +507,14 @@ class MainActivity : AppCompatActivity() {
         binding.searchBar.visibility = View.GONE
         binding.searchInput.text?.clear()
         searchQuery = ""
-        adapter.notifyDataSetChanged()
-        syncEmptyState()
+        notifyLibraryChanged()
         val imm = getSystemService(android.view.inputmethod.InputMethodManager::class.java)
         imm.hideSoftInputFromWindow(binding.searchInput.windowToken, 0)
     }
 
     private fun notifyLibraryChanged() {
         adapter.notifyDataSetChanged()
+        if (viewMode == LibraryViewMode.CAROUSEL) renderCarousel()
         syncEmptyState()
     }
 
@@ -443,7 +524,10 @@ class MainActivity : AppCompatActivity() {
 
     private var searchQuery = ""
     private val displayList get() = if (searchQuery.isBlank()) romList
-        else romList.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        else romList.filter {
+            it.name.contains(searchQuery, ignoreCase = true) ||
+                romDisplayTitle(it).contains(searchQuery, ignoreCase = true)
+        }
 
     private inner class RomLibraryAdapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
         private var gridMode = false
@@ -487,7 +571,7 @@ class MainActivity : AppCompatActivity() {
         private val hdPackIcon: ImageView = itemView.findViewById(R.id.hdPackIcon)
 
         fun bind(rom: RomEntry) {
-            nameText.text = romNameWithoutExtension(rom.name)
+            nameText.text = romDisplayTitle(rom)
             subtitleText.text = buildRomSubtitle(rom)
             hdPackIcon.visibility = if (hasInstalledHdPack(rom)) View.VISIBLE else View.GONE
             itemView.setOnClickListener { launchRom(rom) }
@@ -505,7 +589,7 @@ class MainActivity : AppCompatActivity() {
         private val hdPackIcon: ImageView = itemView.findViewById(R.id.romGridHdPackIcon)
 
         fun bind(rom: RomEntry) {
-            nameText.text = romNameWithoutExtension(rom.name)
+            nameText.text = romDisplayTitle(rom)
             hdPackIcon.visibility = if (hasInstalledHdPack(rom)) View.VISIBLE else View.GONE
             itemView.setOnClickListener { launchRom(rom) }
             itemView.setOnLongClickListener {
@@ -516,11 +600,322 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ── Carousel ──────────────────────────────────────────────────────────────
+
+    private inner class CarouselRomViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val coverImage: ImageView = itemView.findViewById(R.id.romCoverImage)
+        val nameText: TextView = itemView.findViewById(R.id.romGridName)
+        private val hdPackIcon: ImageView = itemView.findViewById(R.id.romGridHdPackIcon)
+        var romPath: String? = null
+        var shade = -1
+        private var boundRom: RomEntry? = null
+        private var boundIdentified = false
+
+        fun bind(rom: RomEntry) {
+            romPath = rom.path
+            boundRom = rom
+            boundIdentified = isRomIdentified(rom)
+            shade = -1
+            nameText.text = romDisplayTitle(rom)
+            hdPackIcon.visibility = if (hasInstalledHdPack(rom)) View.VISIBLE else View.GONE
+            itemView.setOnClickListener { view ->
+                // A tap on a side cover brings it to the middle; the middle one launches.
+                // A controller press always launches, since focus already scrolled it in.
+                if (!view.isInTouchMode || isCarouselChildCentered(view)) {
+                    launchRom(rom)
+                } else {
+                    centerCarouselChild(view)
+                }
+            }
+            itemView.setOnLongClickListener {
+                showGameOptions(rom)
+                true
+            }
+            bindCoverArt(coverImage, rom)
+        }
+
+        /**
+         * Views the carousel keeps cached come back without a rebind, so one bound before
+         * its game was identified would keep the placeholder and file-name title.
+         */
+        fun refreshIfIdentified() {
+            val rom = boundRom ?: return
+            if (!boundIdentified && isRomIdentified(rom)) bind(rom)
+        }
+    }
+
+    private fun isLandscape() =
+        resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    private fun isRomIdentified(rom: RomEntry) =
+        synchronized(coverIdentityLock) { coverTitleByRomPath.containsKey(rom.path) }
+
+    /**
+     * Coverflow: one horizontal row snapped to the middle cover, the rest shrinking and
+     * darkening with distance. With enough games it loops, by reporting a huge item count
+     * and wrapping positions back onto the list.
+     */
+    private inner class CarouselAdapter(val roms: List<RomEntry>) :
+        RecyclerView.Adapter<CarouselRomViewHolder>() {
+        val loops = roms.size >= CAROUSEL_MIN_LOOP_SIZE
+        var itemWidthPx = 0
+
+        override fun getItemCount() = if (loops) Int.MAX_VALUE else roms.size
+
+        fun romAt(position: Int) = roms[position % roms.size]
+
+        /** The adapter position that shows roms[index], near the middle when looping. */
+        fun positionOf(index: Int): Int {
+            if (!loops) return index
+            val middle = Int.MAX_VALUE / 2
+            return middle - middle % roms.size + index
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): CarouselRomViewHolder {
+            val view = LayoutInflater.from(parent.context)
+                .inflate(R.layout.rom_carousel_item, parent, false)
+            view.layoutParams = RecyclerView.LayoutParams(
+                itemWidthPx.coerceAtLeast(1),
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            val holder = CarouselRomViewHolder(view)
+            if (isLandscape()) {
+                // Over the faded bottom of the reflection, to leave height for the cover.
+                holder.nameText.updateLayoutParams<ConstraintLayout.LayoutParams> {
+                    topToBottom = ConstraintLayout.LayoutParams.UNSET
+                    bottomToBottom = R.id.romCoverImage
+                }
+            } else {
+                // Two lines always, so the row height does not jump while scrolling.
+                holder.nameText.minLines = 2
+            }
+            // Keep the side tilt from stretching the near edge too much.
+            view.cameraDistance = 4000f * resources.displayMetrics.density
+            view.setOnFocusChangeListener { focused, hasFocus ->
+                if (hasFocus) centerCarouselChild(focused)
+            }
+            return holder
+        }
+
+        override fun onBindViewHolder(holder: CarouselRomViewHolder, position: Int) {
+            val lp = holder.itemView.layoutParams
+            if (lp.width != itemWidthPx) {
+                lp.width = itemWidthPx
+                holder.itemView.layoutParams = lp
+            }
+            holder.bind(romAt(position))
+        }
+
+        override fun onViewAttachedToWindow(holder: CarouselRomViewHolder) {
+            holder.refreshIfIdentified()
+        }
+    }
+
+    private fun setupCarousel() {
+        carouselLayoutManager = object : LinearLayoutManager(this, HORIZONTAL, false) {
+            // Side covers are pulled in toward the middle (to about half their spacing), so
+            // ones laid out past the edges are on screen. Lay out at least half the width or
+            // two covers' worth beyond each edge, which also starts their art loading early.
+            override fun calculateExtraLayoutSpace(
+                state: RecyclerView.State,
+                extraLayoutSpace: IntArray
+            ) {
+                val extra = maxOf(2 * (carouselAdapter?.itemWidthPx ?: 0), width / 2)
+                extraLayoutSpace[0] = extra
+                extraLayoutSpace[1] = extra
+            }
+        }
+        val carousel = binding.romCarousel
+        carousel.layoutManager = carouselLayoutManager
+        carousel.itemAnimator = null
+        carousel.setItemViewCacheSize(8)
+        carouselSnapHelper.attachToRecyclerView(carousel)
+        carousel.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                applyCarouselTransforms()
+            }
+
+            override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+                if (newState == RecyclerView.SCROLL_STATE_IDLE) {
+                    rememberCarouselCenter()
+                    applyCarouselTransforms()
+                }
+            }
+        })
+        // Rebinds (resize, cover art arriving) attach children without a scroll callback.
+        carousel.addOnChildAttachStateChangeListener(
+            object : RecyclerView.OnChildAttachStateChangeListener {
+                override fun onChildViewAttachedToWindow(view: View) {
+                    carousel.postOnAnimation { applyCarouselTransforms() }
+                }
+
+                override fun onChildViewDetachedFromWindow(view: View) {}
+            }
+        )
+        binding.romCarouselContainer.addOnLayoutChangeListener {
+                _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if ((right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) &&
+                right > left
+            ) {
+                carousel.post { sizeCarouselItems() }
+            }
+        }
+    }
+
+    private fun renderCarousel() {
+        val roms = displayList.toList()
+        if (roms.isEmpty()) {
+            carouselAdapter = null
+            binding.romCarousel.adapter = null
+            return
+        }
+        val adapter = CarouselAdapter(roms)
+        adapter.itemWidthPx = carouselAdapter?.itemWidthPx ?: 0
+        carouselAdapter = adapter
+        // Attached by sizeCarouselItems once the width is known: unsized items would be
+        // 1px wide, and a looping adapter would inflate a thousand of them to fill the row.
+        binding.romCarousel.adapter = null
+        sizeCarouselItems()
+    }
+
+    /**
+     * Sizes covers to fit both the width (a few covers across) and the height left under
+     * the toolbar, so the enlarged middle cover and its title stay on screen.
+     */
+    private fun sizeCarouselItems() {
+        val adapter = carouselAdapter ?: return
+        val carousel = binding.romCarousel
+        val container = binding.romCarouselContainer
+        val rvWidth = carousel.width
+        val availableHeight = container.height - container.paddingTop - container.paddingBottom
+        if (rvWidth <= 0 || availableHeight <= 0) return
+        val landscape = isLandscape()
+        // Portrait: a two-line title and item padding sit under the cover. Landscape is
+        // short on height, so its title sits over the reflection and only padding remains.
+        val chromeHeight = if (landscape) dp(12) else dp(64)
+        val heightShare = if (landscape) 0.92f else 0.85f
+        val coverHeightCap = ((availableHeight * heightShare / CAROUSEL_CENTER_SCALE) - chromeHeight) /
+            (1f + ReflectedCoverView.REFLECTION_FRACTION)
+        val widthFromHeight = (coverHeightCap * COVER_ASPECT).toInt()
+        val widthFromWidth = (rvWidth * (if (landscape) 0.26f else 0.55f)).toInt()
+        val itemWidth = maxOf(dp(96), minOf(widthFromHeight, widthFromWidth))
+        val sidePad = maxOf(0, (rvWidth - itemWidth) / 2)
+        // Room for the centered cover to grow past its slot without clipping.
+        val itemHeightEstimate =
+            (itemWidth / COVER_ASPECT * (1f + ReflectedCoverView.REFLECTION_FRACTION)).toInt() +
+                chromeHeight
+        val vertPad = dp(8) + (itemHeightEstimate * (CAROUSEL_CENTER_SCALE - 1f) / 2f).toInt()
+        carousel.setPadding(sidePad, vertPad, sidePad, vertPad)
+        if (itemWidth != adapter.itemWidthPx) {
+            adapter.itemWidthPx = itemWidth
+            if (carousel.adapter === adapter) adapter.notifyDataSetChanged()
+        }
+        if (carousel.adapter !== adapter) carousel.adapter = adapter
+        scrollCarouselToRemembered()
+    }
+
+    private fun scrollCarouselToRemembered() {
+        val adapter = carouselAdapter ?: return
+        val index = adapter.roms.indexOfFirst { it.path == carouselCenteredPath }.coerceAtLeast(0)
+        // The offset is from the start padding, which is what centers an item.
+        carouselLayoutManager.scrollToPositionWithOffset(adapter.positionOf(index), 0)
+        binding.romCarousel.post { applyCarouselTransforms() }
+    }
+
+    private fun rememberCarouselCenter() {
+        val adapter = carouselAdapter ?: return
+        val snap = carouselSnapHelper.findSnapView(carouselLayoutManager) ?: return
+        val position = binding.romCarousel.getChildAdapterPosition(snap)
+        if (position == RecyclerView.NO_POSITION) return
+        val path = adapter.romAt(position).path
+        if (path != carouselCenteredPath) {
+            carouselCenteredPath = path
+            prefs.edit().putString(PREF_CAROUSEL_ROM_PATH, path).apply()
+        }
+    }
+
+    private fun notifyCarouselRomChanged(romPath: String) {
+        val carousel = binding.romCarousel
+        for (i in 0 until carousel.childCount) {
+            val holder = carousel.getChildViewHolder(carousel.getChildAt(i))
+                as? CarouselRomViewHolder ?: continue
+            if (holder.romPath == romPath && holder.bindingAdapterPosition != RecyclerView.NO_POSITION) {
+                carouselAdapter?.notifyItemChanged(holder.bindingAdapterPosition)
+            }
+        }
+    }
+
+    private fun isCarouselChildCentered(child: View): Boolean {
+        val childCenter = (child.left + child.right) / 2
+        return abs(childCenter - binding.romCarousel.width / 2) < child.width / 2
+    }
+
+    private fun centerCarouselChild(child: View) {
+        val dx = (child.left + child.right) / 2 - binding.romCarousel.width / 2
+        if (dx == 0) return
+        binding.romCarousel.smoothScrollBy(
+            dx, 0, DecelerateInterpolator(1.5f), CAROUSEL_CENTER_SCROLL_MS
+        )
+    }
+
+    /**
+     * Coverflow look, all driven by t, a cover's distance from the middle in slots. The
+     * middle cover is enlarged, lifted and flat with its title; the rest shrink, darken,
+     * turn toward it and stack up behind it. Every term is smooth in t so nothing steps
+     * as covers pass the middle.
+     */
+    private fun applyCarouselTransforms() {
+        val carousel = binding.romCarousel
+        val width = carousel.width
+        if (width <= 0) return
+        val centerX = width / 2f
+        val itemWidth = carouselAdapter?.itemWidthPx?.takeIf { it > 0 }?.toFloat() ?: return
+        val lift = dp(16).toFloat()
+        for (i in 0 until carousel.childCount) {
+            val child = carousel.getChildAt(i)
+            val holder = carousel.getChildViewHolder(child) as? CarouselRomViewHolder ?: continue
+            val dx = (child.left + child.right) / 2f - centerX
+            val side = Math.signum(dx)
+            val t = abs(dx) / itemWidth
+            val near = minOf(1f, t)
+            val eased = near * near * (3f - 2f * near)
+            val focus = 1f - eased
+
+            val scale = CAROUSEL_SIDE_SCALE + (CAROUSEL_CENTER_SCALE - CAROUSEL_SIDE_SCALE) * focus
+            child.scaleX = scale
+            child.scaleY = scale
+            child.rotationY = -side * CAROUSEL_SIDE_TILT_DEGREES * eased
+            // Where the cover is drawn, in slots: the neighbours sit 0.75 out and the rest
+            // every 0.5 after, so they overlap like a stack. Its slope is 1 at the middle
+            // (the centre cover tracks the finger) and 0.5 from one slot out.
+            val drawnAt = 0.5f * t + 0.25f * (1f - (1f - near) * (1f - near))
+            child.translationX = side * (drawnAt - t) * itemWidth
+            // Strictly falling with distance, so inner covers draw over outer ones.
+            child.translationZ = lift / (1f + t)
+
+            holder.nameText.alpha = (1f - minOf(1f, t * 1.5f)).let { it * it }
+
+            val brightness = CAROUSEL_SIDE_BRIGHTNESS + (1f - CAROUSEL_SIDE_BRIGHTNESS) * focus
+            val shade = (brightness * 255f).toInt().coerceIn(0, 255)
+            if (shade != holder.shade) {
+                holder.shade = shade
+                if (shade >= 255) {
+                    holder.coverImage.clearColorFilter()
+                } else {
+                    holder.coverImage.setColorFilter(
+                        Color.rgb(shade, shade, shade),
+                        PorterDuff.Mode.MULTIPLY
+                    )
+                }
+            }
+        }
+    }
+
     // ── Per-game options (long press) ─────────────────────────────────────────
 
     private fun showGameOptions(rom: RomEntry) {
         MaterialAlertDialogBuilder(this)
-            .setTitle(rom.name)
+            .setTitle(romDisplayTitle(rom))
             .setItems(
                 arrayOf(
                     "Download HD Pack",
@@ -742,6 +1137,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** The ROM database title once the ROM is identified, else a cleaned-up file name. */
+    private fun romDisplayTitle(rom: RomEntry): String {
+        val dbTitle = synchronized(coverIdentityLock) { coverTitleByRomPath[rom.path] }
+        return CoverNameMatcher.displayTitle(dbTitle ?: rom.name)
+    }
+
     private fun buildRomSubtitle(rom: RomEntry): String {
         val format = romFormatLabel(rom.name)
         return if (hasInstalledHdPack(rom)) {
@@ -802,20 +1203,55 @@ class MainActivity : AppCompatActivity() {
         coverView.setImageBitmap(bitmap)
     }
 
+    /**
+     * Queues [coverView] for the cover at [memoryKey]. Returns true when no load for that
+     * cover is running yet, so the caller should start one.
+     */
+    private fun addCoverWaiter(memoryKey: String, coverView: ImageView, expectedTag: String): Boolean {
+        synchronized(coverWaiters) {
+            val waiters = coverWaiters[memoryKey]
+            if (waiters != null) {
+                waiters += coverView to expectedTag
+                return false
+            }
+            coverWaiters[memoryKey] = mutableListOf(coverView to expectedTag)
+            return true
+        }
+    }
+
+    /** Whether any view still waiting on this cover shows its game, i.e. wasn't recycled. */
+    private fun isCoverStillWanted(memoryKey: String): Boolean = synchronized(coverWaiters) {
+        coverWaiters[memoryKey]?.any { (view, tag) -> view.tag == tag } == true
+    }
+
+    /** Hands a finished (or failed, with null) load to every view waiting on it. */
+    private fun finishCoverLoad(memoryKey: String, bitmap: Bitmap?) {
+        val waiters = synchronized(coverWaiters) { coverWaiters.remove(memoryKey) } ?: return
+        if (bitmap == null) return
+        runOnUiThread {
+            waiters.forEach { (view, tag) -> applyCoverBitmap(view, tag, bitmap) }
+        }
+    }
+
     private fun loadCoverFileIntoView(
         coverView: ImageView,
         expectedTag: String,
         file: File,
         memoryKey: String
     ) {
-        thread(name = "CoverDecode") {
-            val bitmap = BitmapFactory.decodeFile(file.absolutePath) ?: return@thread
-            synchronized(coverMemoryCache) {
-                coverMemoryCache[memoryKey] = bitmap
+        if (!addCoverWaiter(memoryKey, coverView, expectedTag)) return
+        coverDecodeExecutor.execute {
+            val bitmap = if (isCoverStillWanted(memoryKey)) {
+                BitmapFactory.decodeFile(file.absolutePath)
+            } else {
+                null
             }
-            runOnUiThread {
-                applyCoverBitmap(coverView, expectedTag, bitmap)
+            if (bitmap != null) {
+                synchronized(coverMemoryCache) {
+                    coverMemoryCache[memoryKey] = bitmap
+                }
             }
+            finishCoverLoad(memoryKey, bitmap)
         }
     }
 
@@ -827,13 +1263,13 @@ class MainActivity : AppCompatActivity() {
         cacheFile: File,
         memoryKey: String
     ) {
-        val downloadKey = "$baseUrl|$coverPath"
-        synchronized(coverDownloads) {
-            if (!coverDownloads.add(downloadKey)) return
-        }
+        if (!addCoverWaiter(memoryKey, coverView, expectedTag)) return
 
-        thread(name = "CoverDownload") {
+        coverDownloadExecutor.execute {
+            var bitmap: Bitmap? = null
             try {
+                // Covers flung past while queued are skipped; binding them again re-queues.
+                if (!isCoverStillWanted(memoryKey)) return@execute
                 cacheFile.parentFile?.mkdirs()
                 val tempFile = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
                 val encodedPath = Uri.encode(coverPath)
@@ -848,27 +1284,21 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (tempFile.length() <= 0L) {
                     tempFile.delete()
-                    return@thread
+                    return@execute
                 }
                 if (cacheFile.exists()) cacheFile.delete()
                 if (!tempFile.renameTo(cacheFile)) {
                     tempFile.copyTo(cacheFile, overwrite = true)
                     tempFile.delete()
                 }
-                val bitmap = BitmapFactory.decodeFile(cacheFile.absolutePath) ?: return@thread
+                bitmap = BitmapFactory.decodeFile(cacheFile.absolutePath) ?: return@execute
                 synchronized(coverMemoryCache) {
                     coverMemoryCache[memoryKey] = bitmap
-                }
-                runOnUiThread {
-                    applyCoverBitmap(coverView, expectedTag, bitmap)
-                    adapter.notifyDataSetChanged()
                 }
             } catch (_: Exception) {
                 cacheFile.delete()
             } finally {
-                synchronized(coverDownloads) {
-                    coverDownloads.remove(downloadKey)
-                }
+                finishCoverLoad(memoryKey, bitmap)
             }
         }
     }
@@ -899,7 +1329,7 @@ class MainActivity : AppCompatActivity() {
             if (!coverTitleLoads.add(rom.path)) return
         }
 
-        thread(name = "CoverRomIdentify") {
+        coverIdentifyExecutor.execute {
             var resolvedRegion: NesRomDatabase.Region = NesRomDatabase.Region.NA
             val title = try {
                 val match = NesRomDatabase.findMatch(this, rom.path)
@@ -921,10 +1351,11 @@ class MainActivity : AppCompatActivity() {
             }
 
             runOnUiThread {
-                val index = romList.indexOfFirst { it.path == rom.path }
+                val index = displayList.indexOfFirst { it.path == rom.path }
                 if (index >= 0) {
                     adapter.notifyItemChanged(index)
                 }
+                notifyCarouselRomChanged(rom.path)
             }
         }
     }
@@ -1648,7 +2079,7 @@ class MainActivity : AppCompatActivity() {
             }.toTypedArray()
 
             val builder = MaterialAlertDialogBuilder(this)
-                .setTitle(if (showAll) "All HD Packs" else "HD Packs for ${romNameWithoutExtension(rom.name)}")
+                .setTitle(if (showAll) "All HD Packs" else "HD Packs for ${romDisplayTitle(rom)}")
                 .setItems(labels) { _, which ->
                     val (pack, match) = visible[which]
                     confirmHdPackDownload(pack, match, folderName)
@@ -1849,6 +2280,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun String.removeZipExtension() =
         replace(Regex("""(?i)\.zip$"""), "").ifBlank { "HD Pack" }
+
+    /** Runs the most recent task first, so what's on screen after a fling loads first. */
+    private fun newestFirstExecutor(threads: Int) = ThreadPoolExecutor(
+        threads, threads, 30L, TimeUnit.SECONDS,
+        object : LinkedBlockingDeque<Runnable>() {
+            override fun offer(e: Runnable) = offerFirst(e)
+        }
+    ).apply { allowCoreThreadTimeOut(true) }
 
     private fun dp(value: Int) =
         (value * resources.displayMetrics.density).toInt()

@@ -137,6 +137,26 @@
                     app:iconTint="@color/library_view_toggle_content"
                     app:strokeColor="@color/library_outline" />
 
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnViewCarousel"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="6dp"
+                    android:contentDescription="Carousel view"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:padding="0dp"
+                    android:textColor="@color/library_view_toggle_content"
+                    app:backgroundTint="@color/library_view_toggle_background"
+                    app:icon="@drawable/ic_view_carousel"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    app:iconTint="@color/library_view_toggle_content"
+                    app:strokeColor="@color/library_outline" />
+
             </LinearLayout>
 
             <!-- Search bar (hidden until search is active) -->
@@ -198,6 +218,26 @@
             android:paddingEnd="14dp"
             android:paddingBottom="96dp"
             app:layout_behavior="@string/appbar_scrolling_view_behavior" />
+
+        <FrameLayout
+            android:id="@+id/romCarouselContainer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:visibility="gone"
+            app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/romCarousel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_vertical"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:overScrollMode="never" />
+
+        </FrameLayout>
 
         <TextView
             android:id="@+id/libraryEmptyText"

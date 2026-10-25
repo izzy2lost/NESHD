@@ -76,6 +76,34 @@ object CoverNameMatcher {
         return bestPath?.takeUnless { ambiguous }
     }
 
+    /**
+     * A readable library title: no extension, no trailing region/revision tags, and the
+     * punctuation that ROM extraction turned into underscores put back where it's clear.
+     */
+    fun displayTitle(rawName: String): String {
+        val base = nameWithoutExtension(rawName).trim()
+        var title = base
+        while (true) {
+            val stripped = title.replace(trailingTag, "").trimEnd()
+            if (stripped == title || stripped.isEmpty()) break
+            title = stripped
+        }
+        title = title
+            .replace(Regex("""(?<=\w)_s\b"""), "'s")
+            .replace(Regex("""(?<=[A-Za-z0-9])_(?= )"""), ",")
+            .replace('_', ' ')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        return moveTrailingArticle(title).ifEmpty { base }
+    }
+
+    /**
+     * One trailing "(USA)" or "[!]" tag, or the "_USA_" / "_USA_ Europe_" form extracted zip
+     * names get, where "(", ")" and "," all became "_".
+     */
+    private val trailingTag =
+        Regex("""\s*(\([^()]*\)|\[[^\[\]]*\])$|\s+_[^_\s][^_]*(_ [^_]*)*_$|_[A-Z][^_\s]*_$""")
+
     fun normalizeKey(input: String): String {
         val ascii = Normalizer.normalize(input, Normalizer.Form.NFD)
             .replace(Regex("\\p{Mn}+"), "")
